@@ -1,0 +1,210 @@
+:root {
+  /* surfaces */
+  --bg: #0B0F14;
+  --surface: #111821;
+  --raised: #172130;
+  --overlay: #1D2A3C;
+  --border: #243041;
+  --border-strong: #33445C;
+
+  /* text */
+  --text: #E8EDF3;
+  --text-2: #9AA7B8;
+  --text-3: #66758A;
+
+  /* interactive and status */
+  --accent: #3B82F6;
+  --accent-hover: #5B9BFF;
+  --focus: #93C5FD;
+  --positive: #34D399;
+  --negative: #F87171;
+  --warning: #FBBF24;
+  --live: #EF4444;
+
+  /* timing semantics */
+  --sector-best: #A855F7;
+  --sector-personal: #22C55E;
+  --sector-slower: #FBBF24;
+
+  /* tyres (always paired with a letter) */
+  --tyre-soft: #EF4444;
+  --tyre-medium: #FACC15;
+  --tyre-hard: #E8EDF3;
+  --tyre-inter: #22C55E;
+  --tyre-wet: #3B82F6;
+
+  /* categorical data palette, colour-blind safe */
+  --d1: #56B4E9;
+  --d2: #E69F00;
+  --d3: #009E73;
+  --d4: #D55E00;
+  --d5: #CC79A7;
+  --d6: #F0E442;
+  --d7: #0072B2;
+  --d8: #9AA7B8;
+
+  --radius-s: 4px;
+  --radius-m: 8px;
+  --radius-l: 12px;
+
+  --font-ui: "IBM Plex Sans", system-ui, sans-serif;
+  --font-num: "IBM Plex Mono", ui-monospace, monospace;
+
+  --ease: cubic-bezier(.22, .8, .3, 1);
+  --dur-1: 140ms;
+  --dur-2: 260ms;
+  --dur-3: 600ms;
+
+  /* V7-6 Tab Colors */
+  --tab-dashboard: #FF1E00;
+  --tab-teams: #3B82F6;
+  --tab-drivers: #14B8A6;
+  --tab-live: #F59E0B;
+  --tab-analytics: #6366F1;
+  --tab-teleport: #EC4899;
+  --tab-chat: #22D3EE;
+
+  --c1: #FF1E00;
+  --c2: #3B82F6;
+  --c3: #14B8A6;
+  --c4: #F59E0B;
+  --c5: #6366F1;
+  --c6: #EC4899;
+  --c7: #22D3EE;
+
+  --tab: var(--tab-dashboard);
+}
+
+:root[data-theme="light"] {
+  --bg: #F6F8FB;
+  --surface: #FFFFFF;
+  --raised: #F0F4F9;
+  --overlay: #FFFFFF;
+  --border: #DCE3EC;
+  --border-strong: #C3CEDB;
+
+  --text: #0F172A;
+  --text-2: #475569;
+  --text-3: #64748B;
+  --accent: #2563EB;
+  --accent-hover: #1D4ED8;
+  --focus: #1D4ED8;
+
+  --tyre-hard: #0F172A;
+}
+
+/* V7-6 Page Tab Accents */
+[data-page="dashboard"] { --tab: var(--tab-dashboard); }
+[data-page="teams"] { --tab: var(--tab-teams); }
+[data-page="drivers"] { --tab: var(--tab-drivers); }
+[data-page="live"] { --tab: var(--tab-live); }
+[data-page="analytics"] { --tab: var(--tab-analytics); }
+[data-page="teleport"] { --tab: var(--tab-teleport); }
+[data-page="chat"] { --tab: var(--tab-chat); }
+
+.nav-item {
+  position: relative;
+  transition: background var(--dur-1) var(--ease), color var(--dur-1) var(--ease);
+}
+.nav-item::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 20%;
+  bottom: 20%;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--tab);
+  transform: scaleY(0);
+  transition: transform var(--dur-2) var(--ease);
+}
+.nav-item[aria-current="page"] {
+  color: var(--text);
+  background: color-mix(in srgb, var(--tab) 14%, transparent);
+}
+.nav-item[aria-current="page"]::before,
+.nav-item:hover::before {
+  transform: scaleY(1);
+}
+.nav-item svg {
+  color: var(--tab);
+}
+
+.tabs [role="tab"]:nth-child(7n+1) { --tab: var(--c1); }
+.tabs [role="tab"]:nth-child(7n+2) { --tab: var(--c2); }
+.tabs [role="tab"]:nth-child(7n+3) { --tab: var(--c3); }
+.tabs [role="tab"]:nth-child(7n+4) { --tab: var(--c4); }
+.tabs [role="tab"]:nth-child(7n+5) { --tab: var(--c5); }
+.tabs [role="tab"]:nth-child(7n+6) { --tab: var(--c6); }
+.tabs [role="tab"]:nth-child(7n+7) { --tab: var(--c7); }
+
+.tabs [role="tab"][aria-selected="true"] {
+  color: var(--text);
+  box-shadow: inset 0 -2px 0 var(--tab);
+  background: color-mix(in srgb, var(--tab) 12%, transparent);
+}
+.page-title {
+  border-left: 3px solid var(--tab);
+  padding-left: 12px;
+}
+
+/* V7-7 Scroll Reveal Animation */
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 24px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@supports (animation-timeline: view()) {
+  .reveal {
+    animation: rise linear both;
+    animation-timeline: view();
+    animation-range: entry 0% entry 40%;
+  }
+}
+
+@supports not (animation-timeline: view()) {
+  .reveal {
+    opacity: 0;
+    transform: translate3d(0, 24px, 0);
+    will-change: opacity, transform;
+    transition: opacity var(--dur-3) var(--ease), transform var(--dur-3) var(--ease);
+    transition-delay: calc(var(--i, 0) * 60ms);
+  }
+  .reveal.in {
+    opacity: 1;
+    transform: none;
+    will-change: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+    transition: none !important;
+  }
+}
+
+.tab-panel-enter {
+  opacity: 0;
+  transform: translate3d(0, 8px, 0);
+  animation: tabPanelIn 180ms var(--ease) forwards;
+}
+
+@keyframes tabPanelIn {
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+html:not([data-reduced-motion="true"]) {
+  scroll-behavior: smooth;
+}

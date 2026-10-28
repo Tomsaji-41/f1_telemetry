@@ -1,0 +1,100 @@
+{
+  "nav": {
+    "dashboard": "Dashboard Hub",
+    "constructors": "Teams and Constructors",
+    "drivers": "Drivers and Legends",
+    "live": "Live Telemetry Feed",
+    "analytics": "Analytics Studio",
+    "teleport": "Telemetry Teleport",
+    "pitboss": "Pit Boss"
+  },
+  "topbar": {
+    "commandPalettePlaceholder": "Search routes, drivers or telemetry...",
+    "themeToggleLight": "Switch to light mode",
+    "themeToggleDark": "Switch to dark mode",
+    "healthOnline": "Connected",
+    "healthOffline": "Offline",
+    "seasonLabel": "Season",
+    "raceLabel": "Race",
+    "sessionLabel": "Session"
+  },
+  "common": {
+    "loading": "Loading data...",
+    "retry": "Retry request",
+    "cancel": "Cancel",
+    "close": "Close",
+    "tableToggle": "Table View",
+    "chartToggle": "Chart View",
+    "exportCsv": "Export CSV",
+    "exportPng": "Export PNG",
+    "askPitBoss": "Ask Pit Boss about this",
+    "coverageNote": "Data Coverage Note",
+    "emptyState": "No records available for the selected parameters.",
+    "errorState": "Failed to load requested telemetry stream.",
+    "preparing": "Preparing session dataset...",
+    "liveBadge": "LIVE",
+    "replayBadge": "REPLAY"
+  },
+  "dashboard": {
+    "title": "Race Weekend Intelligence",
+    "classification": "Race Classification",
+    "raceStory": "Race Story Narrative",
+    "strategyGantt": "Tyre Strategy Sequence",
+    "paceScatter": "Lap Time Distribution",
+    "championshipProgression": "Championship Standings Progression",
+    "nextRace": "Next Grand Prix Countdown"
+  },
+  "analytics": {
+    "title": "Analytics Studio",
+    "tabSectors": "Sectors",
+    "tabPace": "Race Pace",
+    "tabTyres": "Tyres",
+    "tabPitStops": "Pit Stops",
+    "tabRaceControl": "Race Control",
+    "tabPositions": "Positions",
+    "tabQualifying": "Qualifying",
+    "tabSeason": "Season"
+  },
+  "telemetry": {
+    "title": "Telemetry Teleport",
+    "driverA": "Primary Driver",
+    "driverB": "Comparison Driver",
+    "speedTrace": "Speed Profile",
+    "deltaTrace": "Time Delta",
+    "throttleBrake": "Throttle and Braking Inputs",
+    "gearRpm": "Gear Selection & RPM",
+    "trackMap": "Track Circuit Map",
+    "brakingZones": "Braking Zone Analysis",
+    "aeroProxy": "Derived Aerodynamic Proxy Metrics"
+  },
+  "pitboss": {
+    "title": "Pit Boss",
+    "welcome": "Welcome to Pit Boss, your grounded race strategy workstation. Ask any question regarding classifications, telemetry, pit stop strategy, and championship history.",
+    "inputPlaceholder": "Ask a question about race results, strategy, or telemetry...",
+    "send": "Send Query",
+    "clear": "Clear Session"
+  },
+  "chart": {
+    "unreachable": "Cannot reach the data service.",
+    "preparing": "Preparing session data…",
+    "notPublished": "Data not yet published for this session.",
+    "sourceError": "Source returned an error.",
+    "empty": "No data available for the selected parameters.",
+    "outsideCoverage": "Data not available for this year.",
+    "bump": {
+      "aria": "Position by lap bump chart"
+    },
+    "degradation": {
+      "fuelNote": "Fuel corrected with a model assumption.",
+      "lowSample": "Low sample — fewer than 8 clean laps; treat slope with caution.",
+      "noSlope": "Fewer than 3 clean laps — no fit available."
+    },
+    "pitSuspect": "Duration as reported by the timing system.",
+    "fullscreen": "Fullscreen",
+    "updated": "Updated"
+  },
+  "footer": {
+    "disclaimer": "Independent student project. Not affiliated with or endorsed by Formula 1 or any team. Formula 1 and the F1 logo are trademarks of their owners."
+  },
+  "retry": "Retry"
+}

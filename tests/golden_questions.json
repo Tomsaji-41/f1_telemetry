@@ -1,0 +1,254 @@
+[
+  {
+    "id": "q01",
+    "question": "Who won the 2021 Abu Dhabi Grand Prix?",
+    "expected_fact": "Verstappen",
+    "type": "factual"
+  },
+  {
+    "id": "q02",
+    "question": "Who won the 2008 Formula 1 Drivers World Championship?",
+    "expected_fact": "Hamilton",
+    "type": "factual"
+  },
+  {
+    "id": "q03",
+    "question": "Who was the 2010 F1 World Drivers Champion?",
+    "expected_fact": "Vettel",
+    "type": "factual"
+  },
+  {
+    "id": "q04",
+    "question": "Did Brawn GP win the Constructors Championship in 2009?",
+    "expected_fact": "Brawn",
+    "type": "factual"
+  },
+  {
+    "id": "q05",
+    "question": "Which circuit hosts the Belgian Grand Prix and what country is it in?",
+    "expected_fact": "Spa",
+    "type": "factual"
+  },
+  {
+    "id": "q06",
+    "question": "What is the name of the circuit that hosts the Italian Grand Prix?",
+    "expected_fact": "Monza",
+    "type": "factual"
+  },
+  {
+    "id": "q07",
+    "question": "Who won the 2023 Italian Grand Prix at Monza?",
+    "expected_fact": "Verstappen",
+    "type": "factual"
+  },
+  {
+    "id": "q08",
+    "question": "Who won the 2024 Monaco Grand Prix?",
+    "expected_fact": "Leclerc",
+    "type": "factual"
+  },
+  {
+    "id": "q09",
+    "question": "Who won the 2019 Austrian Grand Prix?",
+    "expected_fact": "Verstappen",
+    "type": "factual"
+  },
+  {
+    "id": "q10",
+    "question": "Who won the 2005 Japanese Grand Prix at Suzuka?",
+    "expected_fact": "R\u00e4ikk\u00f6nen",
+    "type": "factual"
+  },
+  {
+    "id": "q11",
+    "question": "Who won the 2016 Formula 1 World Drivers Championship?",
+    "expected_fact": "Rosberg",
+    "type": "factual"
+  },
+  {
+    "id": "q12",
+    "question": "Who was crowned the 2022 F1 World Champion?",
+    "expected_fact": "Verstappen",
+    "type": "factual"
+  },
+  {
+    "id": "q13",
+    "question": "Which team won the 2023 F1 Constructors Championship?",
+    "expected_fact": "Red Bull",
+    "type": "factual"
+  },
+  {
+    "id": "q14",
+    "question": "Which constructor won the 2014 World Championship?",
+    "expected_fact": "Mercedes",
+    "type": "factual"
+  },
+  {
+    "id": "q15",
+    "question": "Who won the 2028 Las Vegas Grand Prix?",
+    "expected_fact": "not",
+    "type": "unavailable"
+  },
+  {
+    "id": "q16",
+    "question": "What was the result of round 5 in the 2029 season?",
+    "expected_fact": "not",
+    "type": "unavailable"
+  },
+  {
+    "id": "q17",
+    "question": "What was Fernando Alonso lap time on lap 15 at Monza in 2010?",
+    "expected_fact": "2018",
+    "type": "honest_limit"
+  },
+  {
+    "id": "q18",
+    "question": "Give me the Sector 2 times for Lewis Hamilton at Silverstone in 2012.",
+    "expected_fact": "2018",
+    "type": "honest_limit"
+  },
+  {
+    "id": "q19",
+    "question": "How many pit stops did Lewis Hamilton take at the 2008 British Grand Prix?",
+    "expected_fact": "2012",
+    "type": "honest_limit"
+  },
+  {
+    "id": "q20",
+    "question": "How many wins does Schumacher have?",
+    "expected_fact": "Which",
+    "type": "ambiguous"
+  },
+  {
+    "id": "q21",
+    "question": "Who won the 2024 British Grand Prix at Silverstone?",
+    "expected_fact": "Hamilton",
+    "type": "factual"
+  },
+  {
+    "id": "q22",
+    "question": "Who won the 2024 Hungarian Grand Prix?",
+    "expected_fact": "Piastri",
+    "type": "factual"
+  },
+  {
+    "id": "q23",
+    "question": "Who won the 2024 Dutch Grand Prix at Zandvoort?",
+    "expected_fact": "Norris",
+    "type": "factual"
+  },
+  {
+    "id": "q24",
+    "question": "Who won the 2023 Singapore Grand Prix?",
+    "expected_fact": "Sainz",
+    "type": "factual"
+  },
+  {
+    "id": "q25",
+    "question": "Who took victory at the 2021 Russian Grand Prix in Sochi?",
+    "expected_fact": "Hamilton",
+    "type": "factual"
+  },
+  {
+    "id": "q26",
+    "question": "Who won the chaotic 2020 Italian Grand Prix at Monza?",
+    "expected_fact": "Gasly",
+    "type": "factual"
+  },
+  {
+    "id": "q27",
+    "question": "Who won the 2020 Sakhir Grand Prix?",
+    "expected_fact": "P\u00e9rez",
+    "type": "factual"
+  },
+  {
+    "id": "q28",
+    "question": "Who won the 2007 F1 World Drivers Championship?",
+    "expected_fact": "R\u00e4ikk\u00f6nen",
+    "type": "factual"
+  },
+  {
+    "id": "q29",
+    "question": "Who was the World Drivers Champion in 2006?",
+    "expected_fact": "Alonso",
+    "type": "factual"
+  },
+  {
+    "id": "q30",
+    "question": "Who was the 2005 F1 World Champion?",
+    "expected_fact": "Alonso",
+    "type": "factual"
+  },
+  {
+    "id": "q31",
+    "question": "How many pit stops did Max Verstappen make in the 2023 Bahrain Grand Prix?",
+    "expected_fact": "2",
+    "type": "factual"
+  },
+  {
+    "id": "q32",
+    "question": "Who won the opening round of 2024 in Bahrain?",
+    "expected_fact": "Verstappen",
+    "type": "factual"
+  },
+  {
+    "id": "q33",
+    "question": "Who won the 2023 Las Vegas Grand Prix?",
+    "expected_fact": "Verstappen",
+    "type": "factual"
+  },
+  {
+    "id": "q34",
+    "question": "Who won the 2021 Hungarian Grand Prix?",
+    "expected_fact": "Ocon",
+    "type": "factual"
+  },
+  {
+    "id": "q35",
+    "question": "Who won the 2024 Australian Grand Prix in Melbourne?",
+    "expected_fact": "Sainz",
+    "type": "factual"
+  },
+  {
+    "id": "q36",
+    "question": "Who won the 2024 Miami Grand Prix?",
+    "expected_fact": "Norris",
+    "type": "factual"
+  },
+  {
+    "id": "q37",
+    "question": "What is the circuit for the Australian Grand Prix?",
+    "expected_fact": "Albert Park",
+    "type": "factual"
+  },
+  {
+    "id": "q38",
+    "question": "Which circuit hosts the Canadian Grand Prix?",
+    "expected_fact": "Gilles Villeneuve",
+    "type": "factual"
+  },
+  {
+    "id": "q39",
+    "question": "What nationality is Lewis Hamilton according to his driver profile?",
+    "expected_fact": "British",
+    "type": "factual"
+  },
+  {
+    "id": "q40",
+    "question": "What nationality is Max Verstappen?",
+    "expected_fact": "Dutch",
+    "type": "factual"
+  },
+  {
+    "id": "q41",
+    "question": "Who won the 2024 Belgian Grand Prix at Spa?",
+    "expected_fact": "Hamilton",
+    "type": "factual"
+  },
+  {
+    "id": "q42",
+    "question": "Can you compute tyre degradation for Michael Schumacher at the 2006 Brazilian GP?",
+    "expected_fact": "2018",
+    "type": "honest_limit"
+  }
+]

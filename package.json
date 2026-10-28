@@ -1,0 +1,11 @@
+{
+  "name": "telemetra",
+  "version": "5.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "cmd /c run_all.bat",
+    "dev:backend": "cmd /c .venv\\Scripts\\python.exe -m uvicorn backend.main:app --port 8000 --reload",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "test": "cmd /c .venv\\Scripts\\python.exe -m pytest"
+  }
+}

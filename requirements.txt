@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+python-dotenv
+fastf1
+pandas
+requests
+rapidfuzz
+google-genai
+groq
+pydantic
+pytest
+streamlit
+plotly
