@@ -13,6 +13,7 @@
 import React, { useState, useMemo } from "react";
 import { t } from "@/lib/i18n";
 import { AlertCircle, ChevronDown, ChevronRight, Info } from "lucide-react";
+import { useIdentity } from "@/lib/useIdentity";
 
 interface PitStop {
   driver_id: string;
@@ -51,6 +52,7 @@ interface PitChartProps {
 type SortField = "lap" | "stop" | "code" | "duration" | "pit_lane";
 
 export function PitChart({ d }: PitChartProps) {
+  const { getDriver, getTeam, getDriverColor } = useIdentity();
   const [sortField, setSortField] = useState<SortField>("lap");
   const [sortAsc, setSortAsc] = useState(true);
   const [viewMode, setViewMode] = useState<"chronological" | "driver_grouped" | "teams">("chronological");
@@ -221,7 +223,9 @@ export function PitChart({ d }: PitChartProps) {
                 const dur = s.duration_s;
                 const isOffScale = dur != null && dur > p95Dur;
                 const barPct = dur != null ? Math.min(100, (Math.min(dur, p95Dur) / p95Dur) * 100) : 0;
-                const teamColor = s.color || "#A9A9BC";
+                const drvMeta = getDriver(s.code);
+                const teamColor = drvMeta?.teamColor || s.color || getDriverColor(s.code) || "#A9A9BC";
+                const driverName = drvMeta?.name || s.name || s.code;
 
                 return (
                   <tr key={`${s.code}-${s.lap}-${s.stop}-${idx}`} className="hover:bg-[var(--raised)]">
@@ -238,7 +242,7 @@ export function PitChart({ d }: PitChartProps) {
                           {s.code}
                         </span>
                         <span className="text-[var(--text-3)] text-[11px] truncate max-w-[120px]">
-                          {s.name}
+                          {driverName}
                         </span>
                       </div>
                     </td>
@@ -305,7 +309,10 @@ export function PitChart({ d }: PitChartProps) {
         <div className="space-y-2">
           {driverGroups.map(({ driver, stops: dStops, total_s, has_suspect }) => {
             const isExpanded = expandedDrivers.has(driver.code);
-            const teamColor = driver.color || "#A9A9BC";
+            const drvMeta = getDriver(driver.code);
+            const teamColor = drvMeta?.teamColor || driver.color || getDriverColor(driver.code) || "#A9A9BC";
+            const driverName = drvMeta?.name || driver.name || driver.code;
+            const teamName = drvMeta?.team || driver.team || "Unknown";
 
             return (
               <div
@@ -330,10 +337,10 @@ export function PitChart({ d }: PitChartProps) {
                       {driver.code}
                     </span>
                     <span className="text-[var(--text-2)] text-[12px]">
-                      {driver.name}
+                      {driverName}
                     </span>
                     <span className="text-[11px] text-[var(--text-3)]">
-                      ({driver.team})
+                      ({teamName})
                     </span>
                   </div>
 
@@ -396,23 +403,28 @@ export function PitChart({ d }: PitChartProps) {
       {/* 3. TEAM SUMMARY VIEW */}
       {viewMode === "teams" && (
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-          {teamSummary.map((tm) => (
-            <div
-              key={tm.team}
-              className="p-3.5 border border-[var(--border)] rounded bg-[var(--surface)] space-y-2"
-            >
-              <div className="flex items-center gap-2">
-                <span
-                  className="w-2 h-4 rounded-full"
-                  style={{ backgroundColor: tm.color || "#A9A9BC" }}
-                />
-                <span className="font-semibold text-[13px] text-[var(--text)]">
-                  {tm.team}
-                </span>
-                <span className="text-[11px] text-[var(--text-3)] font-mono ml-auto">
-                  {tm.count} stops
-                </span>
-              </div>
+          {teamSummary.map((tm) => {
+            const teamMeta = getTeam(tm.team);
+            const teamColor = teamMeta?.teamColor || tm.color || "#A9A9BC";
+            const teamName = teamMeta?.name || tm.team;
+
+            return (
+              <div
+                key={tm.team}
+                className="p-3.5 border border-[var(--border)] rounded bg-[var(--surface)] space-y-2"
+              >
+                <div className="flex items-center gap-2">
+                  <span
+                    className="w-2 h-4 rounded-full"
+                    style={{ backgroundColor: teamColor }}
+                  />
+                  <span className="font-semibold text-[13px] text-[var(--text)]">
+                    {teamName}
+                  </span>
+                  <span className="text-[11px] text-[var(--text-3)] font-mono ml-auto">
+                    {tm.count} stops
+                  </span>
+                </div>
               <div className="grid grid-cols-2 gap-2 pt-2 border-t border-[var(--border)] font-mono text-[12px]">
                 <div>
                   <span className="text-[10px] uppercase text-[var(--text-3)] block font-sans">
@@ -432,7 +444,8 @@ export function PitChart({ d }: PitChartProps) {
                 </div>
               </div>
             </div>
-          ))}
+          );
+        })}
         </div>
       )}
     </div>

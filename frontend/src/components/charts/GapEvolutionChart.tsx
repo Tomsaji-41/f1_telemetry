@@ -4,6 +4,7 @@ import React, { useMemo } from "react";
 import { scaleLinear } from "d3-scale";
 import { ChartShell } from "./ChartShell";
 import { useInspector } from "../layouts/inspector-drawer";
+import { useIdentity } from "@/lib/useIdentity";
 
 interface GapItem {
   driver: string;
@@ -23,6 +24,7 @@ interface GapEvolutionProps {
 
 export function GapEvolutionChart({ data, loading = false }: GapEvolutionProps) {
   const { inspectItem } = useInspector();
+  const { getDriver, getDriverColor } = useIdentity();
   const rawSeries = data?.series || [];
 
   const width = 800;
@@ -55,71 +57,86 @@ export function GapEvolutionChart({ data, loading = false }: GapEvolutionProps) 
     return scaleLinear()
       .domain([1, Math.max(10, parsedGaps.length)])
       .range([margin.left, width - margin.right]);
-  }, [parsedGaps, width]);
+  }, [parsedGaps, width, margin.left, margin.right]);
 
   // Inverted Y so 0s (leader) is at the top
   const yScale = useMemo(() => {
     return scaleLinear()
       .domain([0, maxGap])
       .range([margin.top, height - margin.bottom]);
-  }, [maxGap, height]);
+  }, [maxGap, height, margin.top, margin.bottom]);
 
   const csvData = useMemo(() => {
-    let csv = "Driver,Position,Gap\n";
+    let csv = "Driver,DriverName,Position,Gap\n";
     rawSeries.forEach((s) => {
-      csv += `${s.driver},${s.position},${s.gap}\n`;
+      const drv = getDriver(s.driver);
+      const name = drv?.name || s.driver;
+      csv += `${s.driver},"${name}",${s.position},${s.gap}\n`;
     });
     return csv;
-  }, [rawSeries]);
+  }, [rawSeries, getDriver]);
 
   const tableRows = useMemo(() => {
-    return rawSeries.map((s) => [s.driver, `P${s.position}`, s.gap]);
-  }, [rawSeries]);
+    return rawSeries.map((s) => {
+      const drv = getDriver(s.driver);
+      const name = drv?.name || s.driver;
+      return [s.driver, name, `P${s.position}`, s.gap];
+    });
+  }, [rawSeries, getDriver]);
 
   return (
     <ChartShell
-      title="Gap to Leader Evolution"
-      subtitle="Inverted delta time to winner (0.000s leader at top)"
+      title="Race Gap Evolution (Finish Interval)"
+      subtitle="Gap to race leader across all classified finishers"
       source={data?.source || "Jolpica"}
       coverageNote={data?.coverage_note}
       loading={loading}
       empty={!parsedGaps.length}
       csvData={csvData}
       csvFilename="gap_evolution.csv"
-      tableHeaders={["Driver", "Position", "Gap to Leader"]}
+      tableHeaders={["Code", "Driver", "Position", "Gap to Winner"]}
       tableRows={tableRows}
     >
       <div className="w-full overflow-x-auto">
         <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto select-none">
-          {/* Y-axis grid lines (0s, 10s, 20s, ...) */}
-          {[0, maxGap * 0.25, maxGap * 0.5, maxGap * 0.75, maxGap].map((gSec) => (
-            <g key={gSec}>
-              <line
-                x1={margin.left}
-                y1={yScale(gSec)}
-                x2={width - margin.right}
-                y2={yScale(gSec)}
-                stroke="var(--border)"
-                strokeWidth={0.8}
-                strokeDasharray="2 2"
-              />
-              <text
-                x={margin.left - 8}
-                y={yScale(gSec) + 3}
-                fontSize={10}
-                fill="var(--text-3)"
-                textAnchor="end"
-                fontFamily="var(--font-num)"
-              >
-                {gSec === 0 ? "LEADER" : `+${gSec.toFixed(1)}s`}
-              </text>
-            </g>
-          ))}
+          {/* Y-axis Grid */}
+          {[0, maxGap * 0.25, maxGap * 0.5, maxGap * 0.75, maxGap].map((gap) => {
+            const y = yScale(gap);
+            if (!Number.isFinite(y)) return null;
+            return (
+              <g key={gap}>
+                <line
+                  x1={margin.left}
+                  y1={y}
+                  x2={width - margin.right}
+                  y2={y}
+                  stroke="var(--border)"
+                  strokeWidth={0.8}
+                  strokeDasharray="2 2"
+                />
+                <text
+                  x={margin.left - 8}
+                  y={y + 3}
+                  fontSize={10}
+                  fill="var(--text-3)"
+                  textAnchor="end"
+                  fontFamily="var(--font-num)"
+                >
+                  {gap === 0 ? "Leader" : `+${Math.round(gap)}s`}
+                </text>
+              </g>
+            );
+          })}
 
-          {/* Stepped gap bars or line */}
+          {/* Stems & points */}
           {parsedGaps.map((item, idx) => {
             const x = xScale(idx + 1);
             const y = yScale(item.gapSec);
+            if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+
+            const drvMeta = getDriver(item.driver);
+            const color = drvMeta?.teamColor || getDriverColor(item.driver) || "var(--accent)";
+            const displayName = drvMeta?.name || item.driver;
 
             return (
               <g
@@ -128,13 +145,15 @@ export function GapEvolutionChart({ data, loading = false }: GapEvolutionProps) 
                 onClick={() => {
                   inspectItem({
                     type: "driver",
-                    title: item.driver,
+                    title: displayName,
                     subtitle: `Position P${item.position}`,
                     details: {
+                      Driver: displayName,
+                      Team: drvMeta?.team || "Unknown",
                       Classification: `P${item.position}`,
                       "Gap to Winner": item.gap,
                     },
-                    queryContext: `Explain the gap between the leader and ${item.driver}`,
+                    queryContext: `Explain the gap between the leader and ${displayName}`,
                   });
                 }}
               >
@@ -144,7 +163,7 @@ export function GapEvolutionChart({ data, loading = false }: GapEvolutionProps) 
                   y1={yScale(0)}
                   x2={x}
                   y2={y}
-                  stroke="var(--accent)"
+                  stroke={color}
                   strokeWidth={1.5}
                   strokeOpacity={0.7}
                 />
@@ -153,7 +172,7 @@ export function GapEvolutionChart({ data, loading = false }: GapEvolutionProps) 
                   cx={x}
                   cy={y}
                   r={4}
-                  fill="var(--accent)"
+                  fill={color}
                   stroke="var(--surface)"
                   strokeWidth={1.5}
                   className="group-hover:r-6 transition-all"

@@ -74,7 +74,7 @@ def get_session_replay_bundle(year: Optional[int] = None, rnd: Optional[int] = N
     if cached_str is not None and isinstance(cached_str, str):
         try:
             cached = json.loads(cached_str)
-            if isinstance(cached, dict) and cached.get("status") == "ok":
+            if isinstance(cached, dict) and cached.get("status") in ("ok", "partial"):
                 return cached
         except Exception:
             pass
@@ -102,25 +102,39 @@ def get_session_replay_bundle(year: Optional[int] = None, rnd: Optional[int] = N
             "round": rnd
         }
 
-    # Total laps
+    # Loaded laps in telemetry
     try:
-        total_laps = int(laps_df["LapNumber"].max())
+        loaded_laps = int(laps_df["LapNumber"].max())
     except Exception:
-        total_laps = 1
+        loaded_laps = 1
 
     # Season identity for colors, numbers, codes
     season_id = identity.get_season_identity(year)
     drivers_id_map = season_id.get("drivers", {})
     teams_id_map = season_id.get("teams", {})
 
-    # Race details
+    # Race details from Jolpica
     race_info = jolpica.fetch_race_results(year, rnd)
     gp_name = race_info.get("grand_prix") or f"{year} Round {rnd}"
     circuit_name = race_info.get("circuit_name") or "Circuit"
 
-    # Weather: try OpenF1 if 2023-2024, or FastF1 weather_data if present
+    # Official total race laps from winner result if available
+    official_total_laps = None
+    if race_info.get("status") == "ok" and race_info.get("results"):
+        winner_result = next((r for r in race_info["results"] if r.get("position") == 1), race_info["results"][0])
+        try:
+            w_laps = int(winner_result.get("laps", 0))
+            if w_laps > 0:
+                official_total_laps = w_laps
+        except Exception:
+            pass
+
+    total_laps = official_total_laps if official_total_laps else (loaded_laps if loaded_laps > 0 else 1)
+    is_partial = loaded_laps < total_laps
+
+    # Weather: probe OpenF1 if 2023+, or FastF1 weather_data if present
     weather_by_lap = {}
-    if 2023 <= year <= 2024:
+    if year >= 2023:
         try:
             url_sess = f"https://api.openf1.org/v1/sessions?year={year}&session_name=Race"
             sess_list = cache.cached_get_json(url_sess, cache.TTL_PAST_SEASON)
@@ -129,9 +143,9 @@ def get_session_replay_bundle(year: Optional[int] = None, rnd: Optional[int] = N
                 if s_key:
                     url_w = f"https://api.openf1.org/v1/weather?session_key={s_key}"
                     raw_w = cache.cached_get_json(url_w, cache.TTL_PAST_SEASON)
-                    if raw_w and isinstance(raw_w, list):
-                        step = max(1, len(raw_w) // max(total_laps, 1))
-                        for lap_idx in range(1, total_laps + 1):
+                    if raw_w and isinstance(raw_w, list) and raw_w:
+                        step = max(1, len(raw_w) // max(loaded_laps, 1))
+                        for lap_idx in range(1, loaded_laps + 1):
                             w_idx = min(len(raw_w) - 1, (lap_idx - 1) * step)
                             w_item = raw_w[w_idx]
                             weather_by_lap[lap_idx] = {
@@ -139,7 +153,7 @@ def get_session_replay_bundle(year: Optional[int] = None, rnd: Optional[int] = N
                                 "track_temp": f"{float(w_item.get('track_temperature', 0.0)):.1f} °C",
                                 "humidity": f"{int(float(w_item.get('humidity', 0.0)))}%",
                                 "wind_speed": f"{float(w_item.get('wind_speed', 0.0)):.1f} m/s",
-                                "rainfall": bool(w_item.get("rainfall", False)),
+                                "rainfall": bool(w_item.get("rainfall", 0))
                             }
         except Exception as exc:
             logger.debug("OpenF1 weather lookup failed: %s", exc)
@@ -208,7 +222,7 @@ def get_session_replay_bundle(year: Optional[int] = None, rnd: Optional[int] = N
 
     all_driver_codes = sorted(list(laps_df["Driver"].unique()))
 
-    for lap_idx in range(1, total_laps + 1):
+    for lap_idx in range(1, loaded_laps + 1):
         lap_rows = laps_df[laps_df["LapNumber"] == lap_idx]
         
         # Track status resolution
@@ -224,7 +238,8 @@ def get_session_replay_bundle(year: Optional[int] = None, rnd: Optional[int] = N
                 track_status = "VSC"
             elif "2" in combined_ts:
                 track_status = "YELLOW"
-        if lap_idx == total_laps:
+        # Only show CHEQUERED if we reached official race total and session is not partial
+        if lap_idx >= total_laps and not is_partial:
             track_status = "CHEQUERED"
 
         # Leaderboard calculation
@@ -304,7 +319,9 @@ def get_session_replay_bundle(year: Optional[int] = None, rnd: Optional[int] = N
         laps_matrix[lap_idx] = {
             "lap": lap_idx,
             "track_status": track_status,
-            "weather": weather_by_lap.get(lap_idx),
+            "weather": weather_by_lap.get(lap_idx) or {
+                "weather_note": "Weather not recorded for this session"
+            },
             "leaderboard": leaderboard_rows
         }
 
@@ -321,8 +338,14 @@ def get_session_replay_bundle(year: Optional[int] = None, rnd: Optional[int] = N
             "dash": d_info.get("dash", "")
         }
 
+    bundle_status = "partial" if is_partial else "ok"
+    coverage_note = f"Partial data: {loaded_laps} of {total_laps} laps" if is_partial else ""
+
     bundle = {
-        "status": "ok",
+        "status": bundle_status,
+        "coverage_note": coverage_note,
+        "is_partial": is_partial,
+        "loaded_laps": loaded_laps,
         "source": getattr(sess, "source", "FastF1 & Jolpica"),
         "year": year,
         "round": rnd,
@@ -333,7 +356,7 @@ def get_session_replay_bundle(year: Optional[int] = None, rnd: Optional[int] = N
         "pit_events": pit_events,
         "laps": laps_matrix,
         "chart_data": {
-            "laps": list(range(1, total_laps + 1)),
+            "laps": list(range(1, loaded_laps + 1)),
             "positions": dict(chart_positions),
             "lap_times": dict(chart_lap_times)
         }
@@ -342,7 +365,8 @@ def get_session_replay_bundle(year: Optional[int] = None, rnd: Optional[int] = N
     bundle = _sanitize_for_json(bundle)
 
     try:
-        cache.set(cache_key, json.dumps(bundle), cache.TTL_PAST_SEASON)
+        ttl = 60 if is_partial else cache.TTL_PAST_SEASON
+        cache.set(cache_key, json.dumps(bundle), ttl)
     except Exception as exc:
         logger.warning("Failed to cache replay bundle: %s", exc)
     return bundle

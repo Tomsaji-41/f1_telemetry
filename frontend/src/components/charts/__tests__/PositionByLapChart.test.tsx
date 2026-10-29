@@ -99,3 +99,4 @@ describe("PositionByLapChart", () => {
     expect(finLabels.length).toBeGreaterThanOrEqual(1);
   });
 });
+

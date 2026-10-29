@@ -63,6 +63,45 @@ def lighten_color(hex_str: str, factor: float = 0.35) -> str:
     b_new = int(b + (255 - b) * factor)
     return f"#{r_new:02x}{g_new:02x}{b_new:02x}".upper()
 
+def resolve_wikipedia_headshot(name: str, wiki_url: Optional[str] = None) -> Optional[str]:
+    """Retrieve driver headshot thumbnail from Wikipedia REST summary API."""
+    try:
+        slug = ""
+        if wiki_url and "/wiki/" in wiki_url:
+            slug = wiki_url.split("/wiki/")[-1].strip()
+        if not slug and name:
+            slug = name.strip().replace(" ", "_")
+        if not slug:
+            return None
+        url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{slug}"
+        data = cache.cached_get_json(url, cache.TTL_PAST_SEASON)
+        if isinstance(data, dict):
+            thumb = data.get("thumbnail")
+            if isinstance(thumb, dict) and thumb.get("source"):
+                return thumb["source"]
+    except Exception:
+        pass
+    return None
+
+
+def get_openf1_fallback_headshot(num: str, acr: str, name: str) -> Optional[str]:
+    """Fallback search across recent OpenF1 seasons (2024, 2023) if not found in current season."""
+    for past_year in [2024, 2023]:
+        url = f"https://api.openf1.org/v1/drivers?year={past_year}"
+        data = cache.cached_get_json(url, cache.TTL_PAST_SEASON)
+        if isinstance(data, list):
+            norm_name = normalize_text(name)
+            for d in data:
+                d_num = str(d.get("driver_number") or "").strip()
+                d_acr = (d.get("name_acronym") or "").strip().upper()
+                d_name = normalize_text(d.get("full_name") or "")
+                hs = d.get("headshot_url")
+                if hs:
+                    if (num and d_num == num) or (acr and d_acr == acr) or (norm_name and norm_name == d_name):
+                        return hs
+    return None
+
+
 def get_season_identity(year: Optional[int] = None) -> Dict[str, Any]:
     """
     Returns unified identity map for all drivers and teams in the given season.
@@ -185,6 +224,12 @@ def get_season_identity(year: Optional[int] = None) -> Dict[str, Any]:
             match = of1_by_name[normalize_text(name)]
             color = match.get("color")
             headshot = match.get("headshot_url")
+
+        # Headshot fallback chain: OpenF1 (other seasons) -> Wikipedia REST summary API
+        if not headshot:
+            headshot = get_openf1_fallback_headshot(num, code, name)
+        if not headshot:
+            headshot = resolve_wikipedia_headshot(name, s.get("url"))
 
         # Try team color match from OpenF1
         if not color and normalize_text(c_name) in of1_team_colors:

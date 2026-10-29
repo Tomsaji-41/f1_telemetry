@@ -339,7 +339,7 @@ def sector_heatmap(session) -> Dict[str, Any]:
     try:
         raw = session.laps
         if raw is None or raw.empty:
-            return envelope("FastF1", "empty", "No lap data for this session.")
+            return envelope("FastF1", "not_available", "No lap data for this session.", rows=[])
 
         l = clean_laps(raw)
         rows = []
@@ -383,7 +383,7 @@ def sector_heatmap(session) -> Dict[str, Any]:
             drivers=drivers_meta(session, codes),
         )
     except Exception as exc:
-        return envelope("FastF1", "empty", f"sector_heatmap error: {exc}")
+        return envelope("FastF1", "source_error", f"sector_heatmap error: {exc}", rows=[])
 
 
 # ---------------------------------------------------------------------------
@@ -394,7 +394,7 @@ def weather(session) -> Dict[str, Any]:
     try:
         w = session.weather_data
         if w is None or w.empty:
-            return envelope("FastF1", "empty", "No weather data for this session.")
+            return envelope("FastF1", "not_available", "Weather data was unrecorded for this session.", rows=[])
 
         laps = session.laps
         starts = laps.groupby("LapNumber")["LapStartTime"].min().dropna()
@@ -446,8 +446,8 @@ def weather(session) -> Dict[str, Any]:
         )
     except Exception as exc:
         if "datanotloaded" in str(exc).lower():
-            return envelope("FastF1", "not_ingested", "Data not ingested yet.")
-        return envelope("FastF1", "source_error", f"weather error: {exc}")
+            return envelope("FastF1", "not_ingested", "Data not ingested yet.", rows=[])
+        return envelope("FastF1", "source_error", f"weather error: {exc}", rows=[])
 
 
 # ---------------------------------------------------------------------------

@@ -266,9 +266,11 @@ export function PositionByLapChart({ data, loading = false }: PositionByLapProps
                       onClick={() => {
                         inspectItem({
                           type: "driver",
-                          title: code,
+                          title: drvMeta?.name || code,
                           subtitle: "Lap Position History",
                           details: {
+                            Driver: drvMeta?.name || code,
+                            Team: drvMeta?.team || "Unknown",
                             "Start Position": fi >= 0 && yVals[fi] != null ? `P${yVals[fi]}` : "-",
                             "Finish Position": li >= 0 && yVals[li] != null ? `P${yVals[li]}` : "DNF",
                             "Laps Charted": laps.length,

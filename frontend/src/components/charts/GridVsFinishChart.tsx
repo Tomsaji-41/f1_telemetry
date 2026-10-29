@@ -212,6 +212,8 @@ export function GridVsFinishChart({ data, d, loading = false }: GridVsFinishProp
               const drvIdentity = getDriver(r.code);
               const teamColor = drvIdentity?.teamColor || getDriverColor(r.code) || "var(--accent)";
               const strokeDash = isRetirement ? "4 3" : (drvIdentity?.strokeDash || undefined);
+              const displayName = drvIdentity?.name || r.name || r.code;
+              const teamName = drvIdentity?.team || r.team || "Unknown";
 
               let strokeWidth = 1.6;
               let indicatorSymbol = "—";
@@ -242,11 +244,11 @@ export function GridVsFinishChart({ data, d, loading = false }: GridVsFinishProp
                   onClick={() => {
                     inspectItem({
                       type: "driver",
-                      title: r.name || r.code,
+                      title: displayName,
                       subtitle: `Grid P${r.grid} → Finish P${r.finish}`,
                       details: {
-                        Driver: r.name || r.code,
-                        Team: r.team || "Unknown",
+                        Driver: displayName,
+                        Team: teamName,
                         "Grid Position": `P${r.grid}`,
                         "Finish Position": isRetirement ? `${r.badge || "DNF"} (P${r.finish})` : `P${r.finish}`,
                         Delta: indicatorLabel || indicatorSymbol,

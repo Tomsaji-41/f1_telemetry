@@ -32,7 +32,6 @@ except ImportError:
 from .common import envelope, drivers_meta
 
 VERIFIED_TELEMETRY_SESSIONS = [
-    {"year": 2024, "round": 12, "name": "2024 British GP (Silverstone)"},
     {"year": 2024, "round": 1, "name": "2024 Bahrain GP (Sakhir)"},
     {"year": 2023, "round": 22, "name": "2023 Abu Dhabi GP (Yas Marina)"},
     {"year": 2023, "round": 14, "name": "2023 Italian GP (Monza)"},
@@ -43,10 +42,16 @@ VERIFIED_TELEMETRY_SESSIONS = [
 
 
 def find_nearest_telemetry_session(year: int, rnd: int) -> Dict[str, Any]:
-    """Find the chronologically closest session with known telemetry."""
+    """Find the chronologically closest session with known telemetry, strictly excluding requested session."""
+    candidates = [
+        s for s in VERIFIED_TELEMETRY_SESSIONS
+        if not (s["year"] == year and s["round"] == rnd)
+    ]
+    if not candidates:
+        candidates = [s for s in VERIFIED_TELEMETRY_SESSIONS]
     target = year * 30 + rnd
     return min(
-        VERIFIED_TELEMETRY_SESSIONS,
+        candidates,
         key=lambda s: abs((s["year"] * 30 + s["round"]) - target),
     )
 
@@ -108,19 +113,25 @@ def detect_braking_zones(dist, speed, brake, threshold_dist=30) -> List[Dict[str
     return zones[:10]
 
 
+_last_telemetry_diagnostic: Optional[str] = None
+
+
 def _extract_real_lap_telemetry(lap) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
     """
     Attempt to extract real car_data and pos_data from a single FastF1 lap.
     Returns (car_data_with_dist, pos_data) or (None, None).
     Never fabricates points.
     """
+    global _last_telemetry_diagnostic
     if lap is None:
         return None, None
     try:
         if not hasattr(lap, "get_car_data"):
+            _last_telemetry_diagnostic = "Lap object lacks get_car_data method"
             return None, None
         c = lap.get_car_data()
         if c is None or getattr(c, "empty", True) or "Speed" not in c or len(c) < 10:
+            _last_telemetry_diagnostic = "Car data stream empty or missing Speed channel"
             return None, None
         car_with_dist = c.add_distance()
         pos = None
@@ -132,7 +143,9 @@ def _extract_real_lap_telemetry(lap) -> Tuple[Optional[pd.DataFrame], Optional[p
         except Exception:
             pos = None
         return car_with_dist, pos
-    except Exception:
+    except Exception as exc:
+        _last_telemetry_diagnostic = f"{type(exc).__name__}: {str(exc)}"
+        return None, None
         return None, None
 
 
@@ -338,17 +351,15 @@ def build_telemetry_compare(
         # Step 3: If real telemetry is STILL unavailable, return honest 'not_available' status
         if car1 is None or car2 is None:
             nearest = find_nearest_telemetry_session(year, rnd)
+            diag_reason = _last_telemetry_diagnostic or "CarData.z.jsonStream stream was not published or returned an error upstream"
             return envelope(
                 "FastF1",
                 status="not_available",
                 coverage_note=(
                     f"Full car telemetry stream (car data & GPS) is unavailable for {year} Round {rnd} "
-                    "from the upstream timing provider."
+                    f"from the upstream timing provider ({diag_reason})."
                 ),
-                reason=(
-                    f"Car telemetry data stream was not published by the timing provider for {year} Round {rnd} "
-                    "across race and qualifying sessions."
-                ),
+                reason=diag_reason,
                 nearest_session=nearest,
                 session_used=None,
                 driver1=driver1,

@@ -4,6 +4,7 @@ import React, { useState, useEffect } from "react";
 import { fetcher } from "@/lib/api";
 import { useIdentity } from "@/lib/useIdentity";
 import { Skeleton, ErrorState, EmptyState } from "@/components/primitives/kit";
+import { DriverAvatar } from "@/components/DriverAvatar";
 
 interface DriverItem {
   id: string;
@@ -113,26 +114,12 @@ export default function DriversPage(): React.JSX.Element {
                   {/* Driver Header Row */}
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex items-center gap-3">
-                      {headshot ? (
-                        <img
-                          src={headshot}
-                          alt={driver.name}
-                          className="w-12 h-12 rounded-full object-cover border border-[var(--border)] bg-[var(--surface-2)]"
-                          onError={(e) => {
-                            (e.target as HTMLImageElement).style.display = "none";
-                          }}
-                        />
-                      ) : (
-                        <div
-                          className="w-12 h-12 rounded-full flex items-center justify-center font-bold text-[14px] border border-[var(--border)]"
-                          style={{
-                            backgroundColor: "var(--raised)",
-                            color: teamColor,
-                          }}
-                        >
-                          {monogram}
-                        </div>
-                      )}
+                      <DriverAvatar
+                        headshotUrl={headshot}
+                        name={driver.name}
+                        teamColor={teamColor}
+                        size={48}
+                      />
 
                       <div>
                         <div className="flex items-center gap-2">

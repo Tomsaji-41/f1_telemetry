@@ -5,6 +5,7 @@ import { scaleLinear } from "d3-scale";
 import { ChartShell } from "./ChartShell";
 import { TyreBadge } from "../primitives/kit";
 import { useInspector } from "../layouts/inspector-drawer";
+import { useIdentity } from "@/lib/useIdentity";
 
 interface StintData {
   driver: string;
@@ -27,6 +28,7 @@ interface TyreStintGanttProps {
 
 export function TyreStintGantt({ data, loading = false }: TyreStintGanttProps) {
   const { inspectItem } = useInspector();
+  const { getDriver, getDriverColor } = useIdentity();
   const rawStints = (data?.series || (data as any)?.stints || []) as StintData[];
 
   // Group by driver
@@ -58,13 +60,13 @@ export function TyreStintGantt({ data, loading = false }: TyreStintGanttProps) {
   const width = 800;
   const rowHeight = 28;
   const height = Math.max(220, drivers.length * rowHeight + 50);
-  const margin = { top: 20, right: 30, bottom: 30, left: 60 };
+  const margin = { top: 20, right: 30, bottom: 30, left: 70 };
 
   const xScale = useMemo(() => {
     return scaleLinear()
       .domain([1, maxLap])
       .range([margin.left, width - margin.right]);
-  }, [maxLap, width]);
+  }, [maxLap, width, margin.left, margin.right]);
 
   const getCompoundColor = (compound: string) => {
     const norm = (compound || "").toUpperCase();
@@ -77,22 +79,28 @@ export function TyreStintGantt({ data, loading = false }: TyreStintGanttProps) {
   };
 
   const csvData = useMemo(() => {
-    let csv = "Driver,Stint,Compound,StartLap,EndLap,Length\n";
+    let csv = "Driver,DriverName,Stint,Compound,StartLap,EndLap,Length\n";
     rawStints.forEach((s) => {
-      csv += `${s.driver},${s.stint},${s.compound},${s.start_lap},${s.end_lap},${s.end_lap - s.start_lap + 1}\n`;
+      const drvMeta = getDriver(s.driver);
+      const name = drvMeta?.name || s.driver;
+      csv += `${s.driver},"${name}",${s.stint},${s.compound},${s.start_lap},${s.end_lap},${s.end_lap - s.start_lap + 1}\n`;
     });
     return csv;
-  }, [rawStints]);
+  }, [rawStints, getDriver]);
 
   const tableRows = useMemo(() => {
-    return rawStints.map((s) => [
-      s.driver,
-      s.stint,
-      s.compound,
-      `${s.start_lap} - ${s.end_lap}`,
-      s.end_lap - s.start_lap + 1,
-    ]);
-  }, [rawStints]);
+    return rawStints.map((s) => {
+      const drvMeta = getDriver(s.driver);
+      const name = drvMeta?.name || s.driver;
+      return [
+        name,
+        s.stint,
+        s.compound,
+        `${s.start_lap} - ${s.end_lap}`,
+        s.end_lap - s.start_lap + 1,
+      ];
+    });
+  }, [rawStints, getDriver]);
 
   return (
     <ChartShell
@@ -144,9 +152,19 @@ export function TyreStintGantt({ data, loading = false }: TyreStintGanttProps) {
             const y = margin.top + drvIdx * rowHeight;
             if (!Number.isFinite(y)) return null;
             const stints = driverStints[drv] || [];
+            const drvMeta = getDriver(drv);
+            const teamColor = drvMeta?.teamColor || getDriverColor(drv) || "var(--text-3)";
+            const displayName = drvMeta?.name || drv;
 
             return (
               <g key={drv} className="group cursor-pointer">
+                {/* Driver Team Colour Dot */}
+                <circle
+                  cx={margin.left - 48}
+                  cy={y + 11}
+                  r={3.5}
+                  fill={teamColor}
+                />
                 {/* Driver Code Label */}
                 <text
                   x={margin.left - 12}
@@ -174,15 +192,17 @@ export function TyreStintGantt({ data, loading = false }: TyreStintGanttProps) {
                       onClick={() => {
                         inspectItem({
                           type: "point",
-                          title: `${drv} — Stint ${st.stint}`,
+                          title: `${displayName} — Stint ${st.stint}`,
                           subtitle: `${st.compound.toUpperCase()} Compound`,
                           details: {
+                            Driver: displayName,
+                            Team: drvMeta?.team || "Unknown",
                             Compound: st.compound,
                             "Start Lap": st.start_lap,
                             "End Lap": st.end_lap,
                             "Stint Length": `${st.end_lap - st.start_lap + 1} laps`,
                           },
-                          queryContext: `Analyze ${drv} stint ${st.stint} tyre degradation`,
+                          queryContext: `Analyze ${displayName} stint ${st.stint} tyre degradation`,
                         });
                       }}
                     >

@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useState, useEffect, useMemo, useRef } from "react";
+import React, { useState, useEffect, useMemo, useRef, Suspense } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   Radio,
   Play,
@@ -31,6 +32,7 @@ interface ReplayWeather {
   humidity?: string;
   wind_speed?: string;
   rainfall?: boolean;
+  weather_note?: string;
 }
 
 interface LapData {
@@ -43,6 +45,9 @@ interface LapData {
 interface ReplayBundle {
   status: string;
   source: string;
+  coverage_note?: string;
+  is_partial?: boolean;
+  loaded_laps?: number;
   year: number;
   round: number;
   grand_prix: string;
@@ -58,7 +63,14 @@ interface ReplayBundle {
   };
 }
 
-export default function LiveFeedPage(): React.JSX.Element {
+function LiveFeedContent(): React.JSX.Element {
+  const searchParams = useSearchParams();
+  const yearParam = searchParams.get("year");
+  const roundParam = searchParams.get("round");
+  const sessionParam = searchParams.get("session") || "R";
+  const year = yearParam ? parseInt(yearParam, 10) : undefined;
+  const round = roundParam ? parseInt(roundParam, 10) : undefined;
+
   const [isLive, setIsLive] = useState<boolean>(false);
   const [currentLap, setCurrentLap] = useState<number>(1);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
@@ -82,30 +94,41 @@ export default function LiveFeedPage(): React.JSX.Element {
     return () => window.removeEventListener("resize", handleResize);
   }, [bundle]);
 
-  // Initial load: check live status then fetch replay bundle ONCE
+  // Session fetch: abort in-flight on change, reset scrubbing
   useEffect(() => {
     let mounted = true;
+    const controller = new AbortController();
 
     async function initFeed() {
       setLoading(true);
       setError(null);
+      setBundle(null);
+      setCurrentLap(1);
+      setIsPlaying(false);
+
       try {
         const statusRes = await fetcher<{ status: string; is_live: boolean; mode: string }>("/api/live/status").catch(() => null);
-        if (!mounted) return;
+        if (!mounted || controller.signal.aborted) return;
 
-        if (statusRes && statusRes.is_live) {
+        if (!year && !round && statusRes && statusRes.is_live) {
           setIsLive(true);
           setLoading(false);
         } else {
           setIsLive(false);
-          // Fetch complete session replay bundle once
-          const replayRes = await fetcher<ReplayBundle>("/api/replay/bundle").catch((err) => {
+          const q = new URLSearchParams();
+          if (year) q.set("year", String(year));
+          if (round) q.set("round", String(round));
+          if (sessionParam) q.set("session", sessionParam);
+          const qs = q.toString();
+          const bundleUrl = qs ? `/api/replay/bundle?${qs}` : "/api/replay/bundle";
+
+          const replayRes = await fetcher<ReplayBundle>(bundleUrl).catch((err) => {
             throw new Error(`Failed to load session replay: ${err.message || err}`);
           });
 
-          if (!mounted) return;
+          if (!mounted || controller.signal.aborted) return;
 
-          if (replayRes && replayRes.status === "ok") {
+          if (replayRes && (replayRes.status === "ok" || replayRes.status === "partial")) {
             setBundle(replayRes);
             setCurrentLap(1);
           } else {
@@ -114,7 +137,7 @@ export default function LiveFeedPage(): React.JSX.Element {
           setLoading(false);
         }
       } catch (err: any) {
-        if (mounted) {
+        if (mounted && !controller.signal.aborted) {
           setError(err?.message || "Failed to initialize telemetry feed.");
           setLoading(false);
         }
@@ -125,8 +148,9 @@ export default function LiveFeedPage(): React.JSX.Element {
 
     return () => {
       mounted = false;
+      controller.abort();
     };
-  }, []);
+  }, [year, round, sessionParam]);
 
   // Playback loop in memory (zero network requests)
   useEffect(() => {
@@ -145,13 +169,15 @@ export default function LiveFeedPage(): React.JSX.Element {
   }, [isPlaying, isLive, bundle]);
 
   const totalLaps = bundle?.total_laps || 1;
+  const isPartial = Boolean(bundle?.is_partial || bundle?.status === "partial");
   const currentLapData = useMemo(() => {
     if (!bundle || !bundle.laps) return null;
     return bundle.laps[currentLap] || bundle.laps[String(currentLap)] || null;
   }, [bundle, currentLap]);
 
   const leaderboard = currentLapData?.leaderboard || [];
-  const trackStatus = currentLapData?.track_status || (isLive ? "GREEN" : "CHEQUERED");
+  const rawTrackStatus = currentLapData?.track_status || (isLive ? "GREEN" : (isPartial || currentLap < totalLaps ? "GREEN" : "CHEQUERED"));
+  const trackStatus = (rawTrackStatus === "CHEQUERED" && (isPartial || currentLap < totalLaps)) ? "GREEN" : rawTrackStatus;
   const weather = currentLapData?.weather || null;
 
   // Track status badges
@@ -306,24 +332,35 @@ export default function LiveFeedPage(): React.JSX.Element {
         )}
       </section>
 
+      {/* Partial Session Banner */}
+      {isPartial && (
+        <div className="p-3 border border-amber-500/30 rounded-lg bg-amber-500/10 text-amber-300 text-xs font-mono flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="font-bold">⚠ PARTIAL DATA:</span>
+            <span>{bundle?.coverage_note || `Partial data: ${bundle?.loaded_laps || Object.keys(bundle?.laps || {}).length} of ${totalLaps} laps`}</span>
+          </div>
+          <span className="text-[11px] text-amber-400/80">Race in progress or timing discontinued</span>
+        </div>
+      )}
+
       {/* Environmental Strip (Honest real data, no fake placeholders) */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         <Stat
           label="Track Air Temp"
           value={weather?.air_temp || "N/A"}
-          delta={weather?.air_temp ? "Ambient Air" : "Telemetry Unrecorded"}
+          delta={weather?.air_temp ? "Ambient Air" : (weather?.weather_note || "Weather not recorded for this session")}
           deltaType="neutral"
         />
         <Stat
           label="Track Surface"
           value={weather?.track_temp || "N/A"}
-          delta={weather?.track_temp ? "Asphalt Temp" : "Telemetry Unrecorded"}
+          delta={weather?.track_temp ? "Asphalt Temp" : (weather?.weather_note || "Weather not recorded for this session")}
           deltaType="neutral"
         />
         <Stat
           label="Humidity / Wind"
           value={weather?.humidity ? `${weather.humidity} • ${weather.wind_speed || ""}` : "N/A"}
-          delta={weather?.rainfall ? "Rain Active" : "Track Condition"}
+          delta={weather?.rainfall ? "Rain Active" : (weather?.weather_note ? "Condition Unrecorded" : "Track Condition")}
           deltaType={weather?.rainfall ? "negative" : "neutral"}
         />
         <Stat
@@ -610,5 +647,19 @@ export default function LiveFeedPage(): React.JSX.Element {
         </section>
       )}
     </div>
+  );
+}
+
+export default function LiveFeedPage(): React.JSX.Element {
+  return (
+    <Suspense
+      fallback={
+        <div className="p-8 text-center text-[12px] font-mono text-[var(--text-3)]">
+          Loading live telemetry feed...
+        </div>
+      }
+    >
+      <LiveFeedContent />
+    </Suspense>
   );
 }

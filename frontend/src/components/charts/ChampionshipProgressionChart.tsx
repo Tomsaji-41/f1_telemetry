@@ -4,6 +4,7 @@ import React, { useMemo } from "react";
 import { scaleLinear } from "d3-scale";
 import { ChartShell } from "./ChartShell";
 import { useInspector } from "../layouts/inspector-drawer";
+import { useIdentity } from "@/lib/useIdentity";
 
 interface StandingProgressionItem {
   name: string;
@@ -27,6 +28,7 @@ export function ChampionshipProgressionChart({
   loading = false,
 }: ChampionshipProgressionProps) {
   const { inspectItem } = useInspector();
+  const { getDriver, getTeam, getDriverColor } = useIdentity();
   const rawSeries = (data?.series || (data as any)?.standings || []) as StandingProgressionItem[];
 
   const width = 800;
@@ -58,21 +60,25 @@ export function ChampionshipProgressionChart({
     let csv = "Driver,Code,Points,Position\n";
     rawSeries.forEach((s) => {
       const code = s.code || (s as any).id || "DRV";
-      const name = s.name || code;
+      const drv = getDriver(code);
+      const team = getTeam(code);
+      const name = drv?.name || team?.name || s.name || code;
       const pts = Number(s.points) || 0;
       csv += `${name},${code},${pts},${s.position ?? ""}\n`;
     });
     return csv;
-  }, [rawSeries]);
+  }, [rawSeries, getDriver, getTeam]);
 
   const tableRows = useMemo(() => {
     return rawSeries.map((s) => {
       const code = s.code || (s as any).id || "DRV";
-      const name = s.name || code;
+      const drv = getDriver(code);
+      const team = getTeam(code);
+      const name = drv?.name || team?.name || s.name || code;
       const pts = Number(s.points) || 0;
       return [name, code, `${pts} pts`, `P${s.position ?? "-"}`];
     });
-  }, [rawSeries]);
+  }, [rawSeries, getDriver, getTeam]);
 
   return (
     <ChartShell
@@ -121,7 +127,10 @@ export function ChampionshipProgressionChart({
           {/* Points Bars for Top Competitors */}
           {rawSeries.map((s, idx) => {
             const code = s.code || (s as any).id || `D${idx + 1}`;
-            const name = s.name || code;
+            const drv = getDriver(code);
+            const team = getTeam(code);
+            const name = drv?.name || team?.name || s.name || code;
+            const teamColor = drv?.teamColor || team?.teamColor || getDriverColor(code) || "var(--accent)";
             const pts = Number(s.points) || 0;
             const x = xScale(idx + 0.5);
             const y = yScale(pts);
@@ -138,6 +147,8 @@ export function ChampionshipProgressionChart({
                     title: name,
                     subtitle: `Championship P${s.position ?? idx + 1}`,
                     details: {
+                      Driver: name,
+                      Team: drv?.team || team?.name || "Unknown",
                       Championship: `P${s.position ?? idx + 1}`,
                       "Total Points": `${pts} pts`,
                     },
@@ -151,7 +162,7 @@ export function ChampionshipProgressionChart({
                   y={y}
                   width={28}
                   height={barHeight}
-                  fill={idx === 0 ? "var(--d2)" : "var(--accent)"}
+                  fill={teamColor}
                   rx={2}
                   className="hover:opacity-85 transition-opacity"
                 />
