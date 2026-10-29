@@ -200,7 +200,7 @@ export function GridVsFinishChart({ data, d, loading = false }: GridVsFinishProp
               const isRetirement = Boolean(r.is_dnf || r.is_dsq || r.badge === "DNF" || r.badge === "DSQ");
               const drvIdentity = getDriver(r.code);
               const teamColor = drvIdentity?.teamColor || getDriverColor(r.code) || "var(--accent)";
-              const strokeDash = isRetirement ? "4 3" : drvIdentity?.strokeDash;
+              const strokeDash = isRetirement ? "4 3" : (drvIdentity?.strokeDash || undefined);
 
               let strokeWidth = 1.6;
               let indicatorSymbol = "—";

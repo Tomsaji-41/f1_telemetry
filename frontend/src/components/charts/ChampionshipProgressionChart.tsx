@@ -27,7 +27,7 @@ export function ChampionshipProgressionChart({
   loading = false,
 }: ChampionshipProgressionProps) {
   const { inspectItem } = useInspector();
-  const rawSeries = data?.series || [];
+  const rawSeries = (data?.series || (data as any)?.standings || []) as StandingProgressionItem[];
 
   const width = 800;
   const height = 320;
@@ -36,7 +36,8 @@ export function ChampionshipProgressionChart({
   const maxPoints = useMemo(() => {
     let m = 100;
     rawSeries.forEach((s) => {
-      if (s.points > m) m = s.points;
+      const pts = Number(s.points) || 0;
+      if (pts > m) m = pts;
     });
     return Math.ceil(m / 50) * 50;
   }, [rawSeries]);
@@ -56,13 +57,21 @@ export function ChampionshipProgressionChart({
   const csvData = useMemo(() => {
     let csv = "Driver,Code,Points,Position\n";
     rawSeries.forEach((s) => {
-      csv += `${s.name},${s.code},${s.points},${s.position}\n`;
+      const code = s.code || (s as any).id || "DRV";
+      const name = s.name || code;
+      const pts = Number(s.points) || 0;
+      csv += `${name},${code},${pts},${s.position ?? ""}\n`;
     });
     return csv;
   }, [rawSeries]);
 
   const tableRows = useMemo(() => {
-    return rawSeries.map((s) => [s.name, s.code, `${s.points} pts`, `P${s.position}`]);
+    return rawSeries.map((s) => {
+      const code = s.code || (s as any).id || "DRV";
+      const name = s.name || code;
+      const pts = Number(s.points) || 0;
+      return [name, code, `${pts} pts`, `P${s.position ?? "-"}`];
+    });
   }, [rawSeries]);
 
   return (
@@ -107,24 +116,27 @@ export function ChampionshipProgressionChart({
 
           {/* Points Bars for Top Competitors */}
           {rawSeries.map((s, idx) => {
+            const code = s.code || (s as any).id || `D${idx + 1}`;
+            const name = s.name || code;
+            const pts = Number(s.points) || 0;
             const x = xScale(idx + 0.5);
-            const y = yScale(s.points);
+            const y = yScale(pts);
             const barHeight = Math.max(2, height - margin.bottom - y);
 
             return (
               <g
-                key={s.code}
+                key={code}
                 className="group cursor-pointer"
                 onClick={() => {
                   inspectItem({
                     type: "driver",
-                    title: s.name,
-                    subtitle: `Championship P${s.position}`,
+                    title: name,
+                    subtitle: `Championship P${s.position ?? idx + 1}`,
                     details: {
-                      Championship: `P${s.position}`,
-                      "Total Points": `${s.points} pts`,
+                      Championship: `P${s.position ?? idx + 1}`,
+                      "Total Points": `${pts} pts`,
                     },
-                    queryContext: `Summarize ${s.name}'s championship campaign`,
+                    queryContext: `Summarize ${name}'s championship campaign`,
                   });
                 }}
               >
@@ -148,7 +160,7 @@ export function ChampionshipProgressionChart({
                   fontFamily="var(--font-num)"
                   fontWeight="600"
                 >
-                  {s.points}
+                  {pts}
                 </text>
                 {/* Code label */}
                 <text
@@ -160,7 +172,7 @@ export function ChampionshipProgressionChart({
                   fontFamily="var(--font-num)"
                   fontWeight="bold"
                 >
-                  {s.code}
+                  {code}
                 </text>
               </g>
             );

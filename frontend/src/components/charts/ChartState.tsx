@@ -79,6 +79,7 @@ export function ChartState({
       return <>{children}</>;
 
     case "preparing":
+    case "loading":
       return (
         <div style={box}>
           <div>

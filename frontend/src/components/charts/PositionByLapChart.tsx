@@ -199,7 +199,7 @@ export function PositionByLapChart({ data, loading = false }: PositionByLapProps
                 .join(" ");
               const drvMeta = getDriver(code);
               const color = drvMeta?.teamColor || getDriverColour(code);
-              const strokeDash = drvMeta?.strokeDash;
+              const strokeDash = drvMeta?.strokeDash || undefined;
 
               return (
                 <g key={code} className="cursor-pointer group">

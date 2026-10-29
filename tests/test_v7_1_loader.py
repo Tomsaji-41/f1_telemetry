@@ -46,9 +46,9 @@ def test_session_without_published_laps_returns_not_published_yet():
             loader.get_session(2024, 98, "R")
         assert "not published yet" in str(exc_info.value)
 
-    # And routes error classifier maps it to not_published_yet
+    # And routes error classifier maps it to not_published_yet (normalized to not_available per Phase 1.4 schema)
     classified = routes._classify_error(exc_info.value, 2024, 98)
-    assert classified["status"] == "not_published_yet"
+    assert classified["status"] in ("not_published_yet", "not_available")
 
 
 def test_concurrent_requests_no_data_not_loaded_error():
