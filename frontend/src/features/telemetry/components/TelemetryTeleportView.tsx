@@ -15,7 +15,6 @@ import { ChartState } from "@/components/charts/ChartState";
 import { Gauge, Zap, Wind, ShieldAlert, ChevronRight, Activity } from "lucide-react";
 import en from "@/content/en.json";
 import { fetcher } from "@/lib/api";
-import { DEMO_MODE, DEMO_LABEL } from "@/demo/demoData";
 
 interface DriverTrace {
   code: string;
@@ -99,7 +98,7 @@ export function TelemetryTeleportView({ year, round }: TelemetryTeleportViewProp
         if (resData.driver1 && !selectedDriver1) setSelectedDriver1(resData.driver1);
         if (resData.driver2 && !selectedDriver2) setSelectedDriver2(resData.driver2);
 
-        if (resData.status === "preparing" && resData.job_id) {
+        if ((resData.status === "preparing" || resData.status === "loading") && resData.job_id) {
           const jobId = resData.job_id;
           if (pollTimerRef.current) clearInterval(pollTimerRef.current);
           pollTimerRef.current = setInterval(() => {
