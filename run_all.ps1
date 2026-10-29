@@ -6,7 +6,7 @@ Write-Host "========================================================" -Foregroun
 $RootDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 # Start Backend
-Start-Process powershell -ArgumentList "-NoExit", "-ExecutionPolicy", "Bypass", "-Command", "Set-Location '$RootDir'; & .\.venv\Scripts\python.exe -m uvicorn backend.main:app --port 8000"
+Start-Process powershell -ArgumentList "-NoExit", "-ExecutionPolicy", "Bypass", "-Command", "Set-Location '$RootDir'; & .\.venv\Scripts\python.exe -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload"
 
 Start-Sleep -Seconds 2
 
