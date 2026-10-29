@@ -35,6 +35,15 @@ def render_driver_strategy(data: Dict[str, Any], gp_name: str, year: int) -> Dic
     """
     header = make_header(gp_name, year, data.get("source"))
 
+    if data.get("status") != "ok":
+        reason = data.get("reason", "Strategy data could not be retrieved for this session.")
+        return {
+            "status": "not_available",
+            "markdown": f"{header}\n\nDriver strategy could not be retrieved: {reason}",
+            "followups": [{"label": "Race result", "intent": "race_result"}],
+            "sources": []
+        }
+
     driver_name = data.get("driver", "Driver")
     team_name = data.get("team", data.get("constructor", "Team"))
     pos = data.get("position", "-")
@@ -96,11 +105,13 @@ def render_driver_strategy(data: Dict[str, Any], gp_name: str, year: int) -> Dic
 
     markdown = "\n\n".join(lines)
 
+    d_code = data.get("code") or data.get("driver_code") or driver_name
+    slots = {"driver": d_code, "grand_prix": gp_name, "year": year}
     followups = [
-        {"label": "Sector pace", "intent": "sector_analysis"},
-        {"label": "Compare with teammate", "intent": "compare_drivers"},
-        {"label": "Tyre degradation", "intent": "tyre_degradation"},
-        {"label": "Full detail", "intent": "driver_strategy", "depth": "detailed"}
+        {"label": "Sector pace", "action": "chip", "intent": "sector_analysis", "slots": slots},
+        {"label": "Compare with teammate", "action": "chip", "intent": "compare_drivers", "slots": slots},
+        {"label": "Tyre degradation", "action": "chip", "intent": "tyre_degradation", "slots": slots},
+        {"label": "Full detail", "action": "chip", "intent": "driver_strategy", "slots": {**slots, "depth": "detailed"}}
     ]
 
     return {
@@ -111,11 +122,22 @@ def render_driver_strategy(data: Dict[str, Any], gp_name: str, year: int) -> Dic
 
 def render_pit_stops(data: Dict[str, Any], gp_name: str, year: int) -> Dict[str, Any]:
     header = make_header(gp_name, year, data.get("source"))
+
+    if data.get("status") != "ok":
+        reason = data.get("reason", "Pit stop data could not be retrieved for this session.")
+        return {
+            "status": "not_available",
+            "markdown": f"{header}\n\nPit stop data could not be retrieved: {reason}",
+            "followups": [{"label": "Race Result", "intent": "race_result"}],
+            "sources": []
+        }
+
     stops = data.get("pit_stops", [])
     driver_filter = data.get("driver")
 
     if not stops:
         return {
+            "status": "ok",
             "markdown": f"{header}\n\nNo pit stop data recorded for this session.",
             "followups": [{"label": "Race Result", "intent": "race_result"}],
             "sources": ["Jolpica"]
@@ -136,12 +158,13 @@ def render_pit_stops(data: Dict[str, Any], gp_name: str, year: int) -> Dict[str,
 
     table = "| Driver | Stop | Lap | Duration |\n|---|---|---|---|\n" + "\n".join(rows)
     md = f"{header}\n\n{table}"
+    slots = {"grand_prix": gp_name, "year": year}
     followups = [
-        {"label": "Race Result", "intent": "race_result"},
-        {"label": "Tyre Stints", "intent": "tyre_stints"}
+        {"label": "Race Result", "action": "chip", "intent": "race_result", "slots": slots},
+        {"label": "Tyre Stints", "action": "chip", "intent": "tyre_stints", "slots": slots}
     ]
     if len(stops) > 15:
-        followups.append({"label": "Full pit stop list", "intent": "pit_stops", "depth": "detailed"})
+        followups.append({"label": "Full pit stop list", "action": "chip", "intent": "pit_stops", "slots": {**slots, "depth": "detailed"}})
 
     return {
         "markdown": md,
@@ -151,13 +174,24 @@ def render_pit_stops(data: Dict[str, Any], gp_name: str, year: int) -> Dict[str,
 
 def render_tyre_stints(data: Dict[str, Any], gp_name: str, year: int) -> Dict[str, Any]:
     header = make_header(gp_name, year, data.get("source"))
+
+    if data.get("status") != "ok":
+        reason = data.get("reason", "Tyre stint data could not be retrieved for this session.")
+        return {
+            "status": "not_available",
+            "markdown": f"{header}\n\nTyre stint data could not be retrieved: {reason}",
+            "followups": [{"label": "Race Result", "intent": "race_result"}],
+            "sources": []
+        }
+
     stints = data.get("stints", [])
 
     if not stints:
         return {
+            "status": "not_available",
             "markdown": f"{header}\n\nNo stint data recorded for this session.",
             "followups": [{"label": "Race Result", "intent": "race_result"}],
-            "sources": ["FastF1"]
+            "sources": []
         }
 
     # Driver | Stint | Compound | Start | End | Length
@@ -173,11 +207,13 @@ def render_tyre_stints(data: Dict[str, Any], gp_name: str, year: int) -> Dict[st
 
     table = "| Driver | Stint | Compound | Start | End | Length |\n|---|---|---|---|---|---|\n" + "\n".join(rows)
     md = f"{header}\n\n{table}"
+    slots = {"grand_prix": gp_name, "year": year}
     return {
+        "status": "ok",
         "markdown": md,
         "followups": [
-            {"label": "Pit Stops", "intent": "pit_stops"},
-            {"label": "Sector pace", "intent": "sector_analysis"}
+            {"label": "Pit Stops", "action": "chip", "intent": "pit_stops", "slots": slots},
+            {"label": "Sector pace", "action": "chip", "intent": "sector_analysis", "slots": slots}
         ],
         "sources": ["FastF1"]
     }
@@ -185,13 +221,24 @@ def render_tyre_stints(data: Dict[str, Any], gp_name: str, year: int) -> Dict[st
 def render_winner_or_result(data: Dict[str, Any], gp_name: str, year: int, full_detail: bool = False) -> Dict[str, Any]:
     clean_gp = gp_name if "Grand Prix" in gp_name else f"{gp_name} Grand Prix"
     header = make_header(gp_name, year, data.get("source"))
+
+    if data.get("status") != "ok":
+        reason = data.get("reason", "Race results are not available for this session.")
+        return {
+            "status": "not_available",
+            "markdown": f"{header}\n\nRace classification could not be retrieved from Jolpica: {reason}",
+            "followups": [{"label": "Schedule", "intent": "schedule"}],
+            "sources": []
+        }
+
     results = data.get("results", [])
 
     if not results:
         return {
-            "markdown": f"{header}\n\nNo race classification available.",
+            "status": "not_available",
+            "markdown": f"{header}\n\nNo race classification available for this session.",
             "followups": [{"label": "Schedule", "intent": "schedule"}],
-            "sources": ["Jolpica"]
+            "sources": []
         }
 
     winner = results[0]
@@ -223,12 +270,13 @@ def render_winner_or_result(data: Dict[str, Any], gp_name: str, year: int, full_
     if race_notes:
         lines.append(f"*(Note: {race_notes})*")
 
+    slots = {"grand_prix": clean_gp, "year": year}
     followups = [
-        {"label": "Pit stops", "intent": "pit_stops"},
-        {"label": "Tyre stints", "intent": "tyre_stints"}
+        {"label": "Pit stops", "action": "chip", "intent": "pit_stops", "slots": slots},
+        {"label": "Tyre stints", "action": "chip", "intent": "tyre_stints", "slots": slots}
     ]
     if not full_detail and len(results) > 5:
-        followups.insert(0, {"label": "Full detail (Top 10)", "intent": "race_result", "depth": "detailed"})
+        followups.insert(0, {"label": "Full detail (Top 10)", "action": "chip", "intent": "race_result", "slots": {**slots, "depth": "detailed"}})
 
     return {
         "markdown": "\n\n".join(lines),
@@ -236,9 +284,62 @@ def render_winner_or_result(data: Dict[str, Any], gp_name: str, year: int, full_
         "sources": ["Jolpica"]
     }
 
+def render_qualifying(data: Dict[str, Any], gp_name: str, year: int) -> Dict[str, Any]:
+    header = make_header(gp_name, year, data.get("source"))
+    qualifying = data.get("qualifying", []) or data.get("results", [])
+    if data.get("status") != "ok" or not qualifying:
+        return {
+            "markdown": f"Could not retrieve qualifying results for {gp_name} {year}.",
+            "followups": [{"label": "Schedule", "intent": "schedule"}],
+            "sources": [],
+            "status": "not_available"
+        }
+
+    lines = [f"### Qualifying Classification — {gp_name} {year}", header, ""]
+    pole = qualifying[0]
+    pole_name = pole.get("driver") or pole.get("code") or "Pole Sitter"
+    pole_team = pole.get("constructor") or pole.get("team") or ""
+    pole_time = pole.get("q3") or pole.get("time") or pole.get("q2") or ""
+    lines.append(f"**Pole Position:** {pole_name} ({pole_team}) — `{pole_time}`\n")
+    lines.append("| Pos | Driver | Team | Q1 | Q2 | Q3 |")
+    lines.append("|---|---|---|---|---|---|")
+
+    for r in qualifying[:10]:
+        pos = r.get("position", "-")
+        drv = r.get("driver") or r.get("code") or "Driver"
+        team = r.get("constructor") or r.get("team") or "-"
+        q1 = r.get("q1") or "-"
+        q2 = r.get("q2") or "-"
+        q3 = r.get("q3") or "-"
+        lines.append(f"| P{pos} | {drv} | {team} | {q1} | {q2} | {q3} |")
+
+    slots = {"grand_prix": gp_name, "year": year}
+    followups = [
+        {"label": f"Race Result ({gp_name})", "action": "chip", "intent": "race_result", "slots": slots},
+        {"label": f"Pit Stops ({gp_name})", "action": "chip", "intent": "pit_stops", "slots": slots},
+        {"label": f"Tyre Stints ({gp_name})", "action": "chip", "intent": "tyre_stints", "slots": slots},
+    ]
+
+    return {
+        "markdown": "\n".join(lines),
+        "followups": followups,
+        "sources": ["Jolpica"],
+        "status": "ok"
+    }
+
 def render_standings(data: Dict[str, Any], year: int, kind: str = "drivers", full_table: bool = False) -> Dict[str, Any]:
     kind_clean = "Constructors" if "constructor" in kind.lower() else "Drivers"
     header = f"World {kind_clean} Championship Standings {year}"
+
+    if data.get("status") != "ok":
+        reason = data.get("reason", f"Standings data for {year} is not available.")
+        return {
+            "status": "not_available",
+            "markdown": f"**{header}**\n\nCould not be retrieved from Jolpica: {reason}",
+            "followups": [{"label": "Schedule", "value": {"intent": "schedule", "slots": {"year": year}}, "action": "followup"}],
+            "sources": []
+        }
+
     standings = data.get("rows", data.get("standings", []))
     round_num = data.get("round", data.get("after_round", data.get("season", "-")))
     total_rounds = data.get("total_rounds", "-")
@@ -246,9 +347,10 @@ def render_standings(data: Dict[str, Any], year: int, kind: str = "drivers", ful
 
     if not standings:
         return {
+            "status": "not_available",
             "markdown": f"**{header}**\n\nNo standings data available for {year}.",
             "followups": [{"label": "Schedule", "value": {"intent": "schedule", "slots": {"year": year}}, "action": "followup"}],
-            "sources": ["Jolpica"]
+            "sources": []
         }
 
     limit = len(standings) if full_table else 10
@@ -295,6 +397,7 @@ def render_standings(data: Dict[str, Any], year: int, kind: str = "drivers", ful
     })
 
     return {
+        "status": "ok",
         "markdown": md,
         "followups": followups,
         "sources": ["Jolpica"]
@@ -303,14 +406,49 @@ def render_standings(data: Dict[str, Any], year: int, kind: str = "drivers", ful
 def render_circuit_info(data: Dict[str, Any]) -> Dict[str, Any]:
     """
     Renders circuit info: one sentence, no year, no round.
-    Example: 'Circuit de Spa-Francorchamps is located in Stavelot, Belgium and hosted its first Formula 1 Grand Prix in 1950.'
+    Checks that required fields exist and eliminates hollow templates.
     """
-    c_name = data.get("circuit_name", "The circuit")
+    if data.get("status") != "ok" or not data.get("circuit_name"):
+        reason = data.get("reason", "Circuit details could not be retrieved from Jolpica.")
+        return {
+            "status": "not_available",
+            "markdown": f"Circuit information could not be retrieved from Jolpica: {reason}",
+            "followups": [
+                {"label": "Recent race results", "intent": "race_result"},
+                {"label": "Schedule", "intent": "schedule"}
+            ],
+            "sources": []
+        }
+
+    c_name = data.get("circuit_name")
     loc = data.get("locality", "")
     country = data.get("country", "")
-    loc_str = f" in {loc}, {country}" if loc and country else f" in {country}" if country else ""
-    sentence = f"{c_name} is located{loc_str}."
+    first_year = data.get("first_year")
+    lap_record = data.get("lap_record")
+
+    if loc and country:
+        loc_str = f" in {loc}, {country}"
+    elif country:
+        loc_str = f" in {country}"
+    elif loc:
+        loc_str = f" in {loc}"
+    else:
+        loc_str = ""
+
+    if first_year and loc_str:
+        sentence = f"{c_name} is located{loc_str} and hosted its first Formula 1 Grand Prix in {first_year}."
+    elif loc_str:
+        sentence = f"{c_name} is located{loc_str}."
+    elif first_year:
+        sentence = f"{c_name} hosted its first Formula 1 Grand Prix in {first_year}."
+    else:
+        sentence = f"{c_name} is an official Formula 1 circuit."
+
+    if lap_record and isinstance(lap_record, dict) and lap_record.get("time"):
+        sentence += f" Lap record: {lap_record.get('time')} ({lap_record.get('driver', 'Driver')}, {lap_record.get('year', '')})."
+
     return {
+        "status": "ok",
         "markdown": sentence,
         "followups": [
             {"label": "Recent race results", "intent": "race_result"},
@@ -323,6 +461,15 @@ def render_driver_profile(data: Dict[str, Any]) -> Dict[str, Any]:
     """
     driver_profile: 5 lines maximum plus a 'Full career' chip.
     """
+    if data.get("status") != "ok":
+        reason = data.get("reason", "Driver profile data is not available.")
+        return {
+            "status": "not_available",
+            "markdown": f"Driver profile could not be retrieved from Jolpica: {reason}",
+            "followups": [{"label": "Schedule", "intent": "schedule"}],
+            "sources": []
+        }
+
     name = data.get("name", "Driver")
     nat = data.get("nationality", "")
     titles = data.get("world_championships", 0)
@@ -341,6 +488,7 @@ def render_driver_profile(data: Dict[str, Any]) -> Dict[str, Any]:
     ]
     md = "\n".join(lines[:5])
     return {
+        "status": "ok",
         "markdown": md,
         "followups": [{"label": "Full career", "intent": "driver_profile", "depth": "detailed"}],
         "sources": ["Jolpica"]
@@ -350,6 +498,15 @@ def render_team_history(data: Dict[str, Any]) -> Dict[str, Any]:
     """
     team_history: 5 lines maximum plus a 'Full career' chip.
     """
+    if data.get("status") != "ok":
+        reason = data.get("reason", "Constructor history is not available.")
+        return {
+            "status": "not_available",
+            "markdown": f"Constructor history could not be retrieved from Jolpica: {reason}",
+            "followups": [{"label": "Standings", "intent": "standings", "kind": "constructors"}],
+            "sources": []
+        }
+
     team = data.get("name", "Constructor")
     nat = data.get("nationality", "")
     titles = data.get("championships", 0)
@@ -364,6 +521,7 @@ def render_team_history(data: Dict[str, Any]) -> Dict[str, Any]:
     ]
     md = "\n".join(lines[:5])
     return {
+        "status": "ok",
         "markdown": md,
         "followups": [{"label": "Standings", "intent": "standings", "kind": "constructors"}],
         "sources": ["Jolpica"]

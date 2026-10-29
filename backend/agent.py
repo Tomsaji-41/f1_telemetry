@@ -86,6 +86,7 @@ async def process_chat(
     message: Optional[str] = None,
     action: Optional[str] = None,
     value: Optional[Any] = None,
+    chip: Optional[Dict[str, Any]] = None,
     option_label: Optional[str] = None,
     option_index: Optional[int] = None,
     pending_state: Optional[Dict[str, Any]] = None,
@@ -115,11 +116,28 @@ async def process_chat(
     last_race = conv_state.get("last_race")
     greeted = conv_state.get("greeted", False)
 
+    # Initialize variables for all code paths (prevents UnboundLocalError)
+    intent = "unknown"
+    filled_slots: Dict[str, Any] = {}
+    tool_outputs: List[Any] = []
+    sources: List[str] = []
+
     try:
         # =====================================================================
         # 1. ACTION REQUESTS (CHIP CLICKS) - NEVER SENT THROUGH PARSER
         # =====================================================================
-        if action:
+        if action == "chip" or chip is not None:
+            chip_data = chip if chip is not None else (value if isinstance(value, dict) else {})
+            if isinstance(chip_data, str):
+                try:
+                    chip_data = json.loads(chip_data)
+                except Exception:
+                    chip_data = {}
+            intent = chip_data.get("intent", "unknown")
+            filled_slots = dict(chip_data.get("slots", {}))
+            conv_state["pending"] = None
+            logger.info(f"[agent.chip] Structured chip: intent={intent}, slots={filled_slots}")
+        elif action:
             logger.info(f"[agent.action] action={action} value={value} option_label={option_label} option_index={option_index}")
 
             # 1.1 CANCEL
@@ -529,7 +547,7 @@ async def process_chat(
                         conv_state["greeted"] = True
                         state.save_conv_state(conv_id, client_id, conv_state)
                         welcome_md = (
-                            "Welcome to **AI Pitboss** — grounded F1 telemetry and race strategy chatbot.\n\n"
+                            "Welcome to **Pit Boss** — grounded F1 telemetry and race strategy chatbot.\n\n"
                             "Ask any question about race results, qualifying, telemetry, pit stop strategy, and championship standings."
                         )
                         curr_yr = datetime.date.today().year
@@ -583,6 +601,10 @@ async def process_chat(
 
                 # Check missing slots
                 missing = parser.get_missing_slots(intent, filled_slots, raw_text)
+                if intent == "standings" and "year" in filled_slots and missing == ["kind"]:
+                    filled_slots["kind"] = "drivers"
+                    missing = []
+
                 if missing:
                     awaiting_slot = missing[0]
                     # Build options
@@ -677,30 +699,49 @@ async def process_chat(
 
         # Execute intent tools
         if intent == "winner":
-            fut = TOOL_EXECUTOR.submit(run_tool_safe, tools.get_race_result, year_int, gp_slot or 1)
+            target_gp = gp_slot or (last_race.get("grand_prix") if last_race else None)
+            if not target_gp:
+                sched = tools.get_season_schedule(year_int)
+                sched_races = sched.get("schedule", [])
+                completed = [r for r in sched_races if r.get("status") == "completed"]
+                target_gp = completed[-1]["round"] if completed else 1
+
+            fut = TOOL_EXECUTOR.submit(run_tool_safe, tools.get_race_result, year_int, target_gp)
             race_res = await_future_safe(fut, default={})
             tool_outputs.append(race_res)
             gp_name = race_res.get("grand_prix") or (f"{gp_slot} Grand Prix" if gp_slot else "Grand Prix")
             rendered_data = render.render_winner_or_result(race_res, gp_name, year_int)
-            sources = ["Jolpica"]
-            conv_state["last_race"] = {"year": year_int, "round": race_res.get("round", 1), "grand_prix": gp_name}
+            sources = ["Jolpica"] if (race_res.get("status") == "ok" and rendered_data.get("status") != "not_available") else []
+            if race_res.get("status") == "ok" and race_res.get("round") and race_res.get("results"):
+                conv_state["last_race"] = {"year": year_int, "round": int(race_res["round"]), "grand_prix": gp_name}
 
         elif intent == "race_result":
-            fut = TOOL_EXECUTOR.submit(run_tool_safe, tools.get_race_result, year_int, gp_slot or 1)
+            target_gp = gp_slot or (last_race.get("grand_prix") if last_race else None)
+            if not target_gp:
+                sched = tools.get_season_schedule(year_int)
+                sched_races = sched.get("schedule", [])
+                completed = [r for r in sched_races if r.get("status") == "completed"]
+                target_gp = completed[-1]["round"] if completed else 1
+
+            fut = TOOL_EXECUTOR.submit(run_tool_safe, tools.get_race_result, year_int, target_gp)
             race_res = await_future_safe(fut, default={})
             tool_outputs.append(race_res)
             gp_name = race_res.get("grand_prix") or (f"{gp_slot} Grand Prix" if gp_slot else "Grand Prix")
             rendered_data = render.render_winner_or_result(race_res, gp_name, year_int, full_detail=True)
-            sources = ["Jolpica"]
-            conv_state["last_race"] = {"year": year_int, "round": race_res.get("round", 1), "grand_prix": gp_name}
+            sources = ["Jolpica"] if (race_res.get("status") == "ok" and rendered_data.get("status") != "not_available") else []
+            if race_res.get("status") == "ok" and race_res.get("round") and race_res.get("results"):
+                conv_state["last_race"] = {"year": year_int, "round": int(race_res["round"]), "grand_prix": gp_name}
 
         elif intent == "qualifying":
-            fut = TOOL_EXECUTOR.submit(run_tool_safe, tools.get_qualifying_result, year_int, gp_slot or 1)
+            target_gp = gp_slot or (last_race.get("grand_prix") if last_race else None) or 1
+            fut = TOOL_EXECUTOR.submit(run_tool_safe, tools.get_qualifying_result, year_int, target_gp)
             q_res = await_future_safe(fut, default={})
             tool_outputs.append(q_res)
             gp_name = q_res.get("grand_prix") or (f"{gp_slot} Grand Prix" if gp_slot else "Grand Prix")
             rendered_data = render.render_qualifying(q_res, gp_name, year_int)
-            sources = ["Jolpica"]
+            sources = ["Jolpica"] if (q_res.get("status") == "ok" and rendered_data.get("status") != "not_available") else []
+            if q_res.get("status") == "ok" and q_res.get("round") and (q_res.get("results") or q_res.get("qualifying")):
+                conv_state["last_race"] = {"year": year_int, "round": int(q_res["round"]), "grand_prix": gp_name}
 
         elif intent == "standings":
             kind = filled_slots.get("kind", "drivers")
@@ -709,8 +750,8 @@ async def process_chat(
             standings_data = await_future_safe(fut, default={})
             tool_outputs.append(standings_data)
             rendered_data = render.render_standings(standings_data, year_int, kind=kind, full_table=(depth == "full"))
-            sources = ["Jolpica"]
-            conv_state["last_race"] = {"year": year_int, "round": standings_data.get("round", 1), "grand_prix": f"{year_int} Season"}
+            sources = ["Jolpica"] if (standings_data.get("status") == "ok" and rendered_data.get("status") != "not_available") else []
+            # Note: standings does NOT update last_race
 
         elif intent == "driver_strategy":
             driver_name = filled_slots.get("driver", "")
@@ -720,66 +761,106 @@ async def process_chat(
             d_full_name = d_res.get("name", driver_name.title())
 
             # Resolve exact GP name
-            gp_res = resolver.resolve_gp(gp_slot or "1", year_int)
+            target_gp = gp_slot or (last_race.get("grand_prix") if last_race else "1")
+            gp_res = resolver.resolve_gp(str(target_gp), year_int)
             gp_name = gp_res.get("grand_prix") if gp_res.get("status") == "ok" else (f"{gp_slot} Grand Prix" if gp_slot else "Grand Prix")
-            round_val = gp_res.get("round", 1) if gp_res.get("status") == "ok" else (gp_slot or 1)
+            round_val = gp_res.get("round") if gp_res.get("status") == "ok" else None
 
-            # Parallel tool calls: race results + pit stops + tyre stints (2018+)
-            fut_race = TOOL_EXECUTOR.submit(run_tool_safe, tools.get_race_result, year_int, round_val)
-            fut_stops = TOOL_EXECUTOR.submit(run_tool_safe, tools.get_pit_stops, year_int, round_val, driver=driver_name)
-            fut_stints = None
-            if year_int >= 2018:
-                fut_stints = TOOL_EXECUTOR.submit(run_tool_safe, tools.get_tyre_stints, year_int, round_val, driver=d_code)
+            if not round_val:
+                tool_outputs.append(gp_res)
+                rendered_data = {
+                    "status": "not_available",
+                    "markdown": f"Grand Prix '{target_gp}' could not be resolved for season {year_int}.",
+                    "followups": [{"label": "Schedule", "intent": "schedule"}],
+                    "sources": []
+                }
+                sources = []
+            else:
+                fut_race = TOOL_EXECUTOR.submit(run_tool_safe, tools.get_race_result, year_int, round_val)
+                fut_stops = TOOL_EXECUTOR.submit(run_tool_safe, tools.get_pit_stops, year_int, round_val, driver=driver_name)
+                fut_stints = None
+                if year_int >= 2018:
+                    fut_stints = TOOL_EXECUTOR.submit(run_tool_safe, tools.get_tyre_stints, year_int, round_val, driver=d_code)
 
-            race_res = await_future_safe(fut_race, 2.5, default={})
-            stops_data = await_future_safe(fut_stops, 2.5, default={})
-            stints_data = await_future_safe(fut_stints, 2.5, default={}) if fut_stints else {}
+                race_res = await_future_safe(fut_race, 2.5, default={})
+                stops_data = await_future_safe(fut_stops, 2.5, default={})
+                stints_data = await_future_safe(fut_stints, 2.5, default={}) if fut_stints else {}
 
-            tool_outputs.append(race_res)
-            tool_outputs.append(stops_data)
-            if stints_data:
-                tool_outputs.append(stints_data)
+                tool_outputs.append(race_res)
+                tool_outputs.append(stops_data)
+                if stints_data:
+                    tool_outputs.append(stints_data)
 
-            driver_row = {}
-            if race_res.get("status") == "ok":
-                for r in race_res.get("results", []):
-                    if (d_id and r.get("driverId") == d_id) or (driver_name.lower() in r.get("driver", "").lower()):
-                        driver_row = r
-                        break
+                driver_row = {}
+                if race_res.get("status") == "ok":
+                    for r in race_res.get("results", []):
+                        if (d_id and r.get("driverId") == d_id) or (driver_name.lower() in r.get("driver", "").lower()):
+                            driver_row = r
+                            break
 
-            strat_data = {
-                "driver": driver_row.get("driver", d_full_name),
-                "team": driver_row.get("constructor", "n/a"),
-                "position": driver_row.get("position", "-"),
-                "points": driver_row.get("points", 0),
-                "stints": stints_data.get("stints", []) if isinstance(stints_data, dict) else [],
-                "pit_stops": stops_data.get("pit_stops", []) if isinstance(stops_data, dict) else []
-            }
-            rendered_data = render.render_driver_strategy(strat_data, gp_name, year_int)
-            sources = ["FastF1", "Jolpica"] if (fut_stints and stints_data.get("status") == "ok") else ["Jolpica"]
-            conv_state["last_race"] = {"year": year_int, "round": round_val, "grand_prix": gp_name}
+                strat_data = {
+                    "status": race_res.get("status", "ok"),
+                    "driver": driver_row.get("driver", d_full_name),
+                    "team": driver_row.get("constructor", "n/a"),
+                    "position": driver_row.get("position", "-"),
+                    "points": driver_row.get("points", 0),
+                    "stints": stints_data.get("stints", []) if isinstance(stints_data, dict) else [],
+                    "pit_stops": stops_data.get("pit_stops", []) if isinstance(stops_data, dict) else []
+                }
+                rendered_data = render.render_driver_strategy(strat_data, gp_name, year_int)
+                sources = ["FastF1", "Jolpica"] if (fut_stints and stints_data.get("status") == "ok") else ["Jolpica"]
+                if race_res.get("status") == "ok":
+                    conv_state["last_race"] = {"year": year_int, "round": round_val, "grand_prix": gp_name}
 
         elif intent == "pit_stops":
-            gp_res = resolver.resolve_gp(gp_slot or "1", year_int)
+            target_gp = gp_slot or (last_race.get("grand_prix") if last_race else "1")
+            gp_res = resolver.resolve_gp(str(target_gp), year_int)
             gp_name = gp_res.get("grand_prix") if gp_res.get("status") == "ok" else (f"{gp_slot} Grand Prix" if gp_slot else "Grand Prix")
+            round_val = gp_res.get("round") if gp_res.get("status") == "ok" else None
             driver_val = filled_slots.get("driver")
-            fut = TOOL_EXECUTOR.submit(run_tool_safe, tools.get_pit_stops, year_int, gp_slot or 1, driver=driver_val)
-            stops_res = await_future_safe(fut, 2.5, default={})
-            tool_outputs.append(stops_res)
-            rendered_data = render.render_pit_stops(stops_res, gp_name, year_int)
-            sources = ["Jolpica"]
-            conv_state["last_race"] = {"year": year_int, "round": gp_res.get("round", 1), "grand_prix": gp_name}
+
+            if not round_val:
+                tool_outputs.append(gp_res)
+                rendered_data = {
+                    "status": "not_available",
+                    "markdown": f"Grand Prix '{target_gp}' could not be resolved for season {year_int}.",
+                    "followups": [{"label": "Schedule", "intent": "schedule"}],
+                    "sources": []
+                }
+                sources = []
+            else:
+                fut = TOOL_EXECUTOR.submit(run_tool_safe, tools.get_pit_stops, year_int, round_val, driver=driver_val)
+                stops_res = await_future_safe(fut, 2.5, default={})
+                tool_outputs.append(stops_res)
+                rendered_data = render.render_pit_stops(stops_res, gp_name, year_int)
+                sources = ["Jolpica"] if (stops_res.get("status") == "ok" and rendered_data.get("status") != "not_available") else []
+                if stops_res.get("status") == "ok":
+                    conv_state["last_race"] = {"year": year_int, "round": round_val, "grand_prix": gp_name}
 
         elif intent == "tyre_stints":
-            gp_res = resolver.resolve_gp(gp_slot or "1", year_int)
+            target_gp = gp_slot or (last_race.get("grand_prix") if last_race else "1")
+            gp_res = resolver.resolve_gp(str(target_gp), year_int)
             gp_name = gp_res.get("grand_prix") if gp_res.get("status") == "ok" else (f"{gp_slot} Grand Prix" if gp_slot else "Grand Prix")
+            round_val = gp_res.get("round") if gp_res.get("status") == "ok" else None
             driver_val = filled_slots.get("driver")
-            fut = TOOL_EXECUTOR.submit(run_tool_safe, tools.get_tyre_stints, year_int, gp_slot or 1, driver=driver_val)
-            stints_res = await_future_safe(fut, 2.5, default={})
-            tool_outputs.append(stints_res)
-            rendered_data = render.render_tyre_stints(stints_res, gp_name, year_int)
-            sources = ["FastF1"]
-            conv_state["last_race"] = {"year": year_int, "round": gp_res.get("round", 1), "grand_prix": gp_name}
+
+            if not round_val:
+                tool_outputs.append(gp_res)
+                rendered_data = {
+                    "status": "not_available",
+                    "markdown": f"Grand Prix '{target_gp}' could not be resolved for season {year_int}.",
+                    "followups": [{"label": "Schedule", "intent": "schedule"}],
+                    "sources": []
+                }
+                sources = []
+            else:
+                fut = TOOL_EXECUTOR.submit(run_tool_safe, tools.get_tyre_stints, year_int, round_val, driver=driver_val)
+                stints_res = await_future_safe(fut, 2.5, default={})
+                tool_outputs.append(stints_res)
+                rendered_data = render.render_tyre_stints(stints_res, gp_name, year_int)
+                sources = ["FastF1"] if (stints_res.get("status") == "ok" and rendered_data.get("status") != "not_available") else []
+                if stints_res.get("status") == "ok":
+                    conv_state["last_race"] = {"year": year_int, "round": round_val, "grand_prix": gp_name}
 
         elif intent == "circuit_info":
             c_or_gp = gp_slot or raw_text
@@ -787,6 +868,7 @@ async def process_chat(
             c_data = await_future_safe(fut, 2.5, default={})
             tool_outputs.append(c_data)
             rendered_data = render.render_circuit_info(c_data)
+            sources = ["Jolpica"] if (c_data.get("status") == "ok" and rendered_data.get("status") != "not_available") else []
             sources = ["Jolpica"]
 
         elif intent == "schedule":
@@ -935,7 +1017,6 @@ async def process_chat(
                         "team": team_name,
                         "position": f"P{pos_val}",
                         "points": pts_val,
-                        "link": f"/drivers/{d_id}"
                     }
                 ]
             }
@@ -952,6 +1033,52 @@ async def process_chat(
 
         collector.tool_calls.append({"duration_ms": round((time.time() - t_t0) * 1000, 2)})
 
+        # Failure check: If any tool failed or rendered_data is not available, propagate failure
+        failed_tool = None
+        for t in tool_outputs:
+            if isinstance(t, dict) and t.get("status") in ["not_available", "error"]:
+                failed_tool = t
+                break
+
+        if failed_tool or rendered_data.get("status") in ["not_available", "error"]:
+            fail_dict = failed_tool or rendered_data
+            fail_src = fail_dict.get("source", "Jolpica")
+            fail_reason = fail_dict.get("reason", "Requested telemetry/race data could not be retrieved.")
+            fail_note = fail_dict.get("coverage_note", "")
+            
+            fail_text = rendered_data.get("markdown") if rendered_data.get("markdown") and "could not be retrieved" in rendered_data.get("markdown") else f"Data for {intent.replace('_', ' ')} could not be retrieved from {fail_src}: {fail_reason}"
+            if fail_note and fail_note not in fail_text:
+                fail_text += f"\n\n*(Coverage note: {fail_note})*"
+
+            state.save_conv_state(conv_id, client_id, conv_state)
+            collector.total_ms = round((time.time() - t_start) * 1000, 2)
+
+            yield ("answer", {
+                "markdown": fail_text,
+                "followups": rendered_data.get("followups", [{"label": "Schedule", "intent": "schedule"}]),
+                "answer_intent": intent,
+                "blocks": [],
+                "turn_id": msg_id
+            })
+
+            last_race_out = conv_state.get("last_race") if intent not in ["standings", "champions", "circuit_info", "schedule", "career_records"] else None
+            yield ("done", {
+                "verified": False,
+                "sources": [],
+                "resolved_context": {},
+                "last_resolved_race": last_race_out,
+                "model": "code",
+                "fallback_reason": "tool_failure",
+                "timings_ms": collector.to_dict(),
+                "fetched_at": utils.format_utc_timestamp(),
+                "fetched_at_iso": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                "message_id": msg_id,
+                "turn_id": msg_id,
+                "pending_state": conv_state.get("pending"),
+                "debug": {"cache": cache.get_timing_cache_status()},
+            })
+            return
+
         # Verifier check
         yield ("status", {"stage": "verifying"})
         t_v0 = time.time()
@@ -959,17 +1086,31 @@ async def process_chat(
         v_report = verifier.check(ans_md, tool_outputs, resolved_context=filled_slots)
         collector.verify_ms = round((time.time() - t_v0) * 1000, 2)
         final_answer = v_report.get("cleaned_text", ans_md)
+        is_verified = bool(v_report.get("verified", True))
+        clean_sources = list(dict.fromkeys(sources)) if is_verified else []
 
         # Save updated conversation state
         state.save_conv_state(conv_id, client_id, conv_state)
         collector.total_ms = round((time.time() - t_start) * 1000, 2)
+
+        # Deduplicate blocks by (type, id) and strip legacy links
+        raw_blocks = rendered_data.get("blocks", [])
+        seen_keys = set()
+        deduped_blocks = []
+        for b in raw_blocks:
+            if isinstance(b, dict):
+                k = (b.get("type"), b.get("id"))
+                if k not in seen_keys:
+                    seen_keys.add(k)
+                    b_clean = {k2: v2 for k2, v2 in b.items() if k2 != "link"}
+                    deduped_blocks.append(b_clean)
 
         # Emit answer event
         yield ("answer", {
             "markdown": final_answer,
             "followups": rendered_data.get("followups", []),
             "answer_intent": intent,
-            "blocks": rendered_data.get("blocks", []),
+            "blocks": deduped_blocks,
             "turn_id": msg_id
         })
 
@@ -981,14 +1122,15 @@ async def process_chat(
         iso_now = datetime.datetime.now(datetime.timezone.utc).isoformat()
         formatted_stamp = utils.format_utc_timestamp(datetime.datetime.now(datetime.timezone.utc))
 
+        last_race_out = conv_state.get("last_race") if intent not in ["standings", "champions", "circuit_info", "schedule", "career_records"] else None
         yield ("done", {
-            "verified": True,
-            "sources": sources,
+            "verified": is_verified,
+            "sources": clean_sources,
             "resolved_context": {
                 "grand_prix": footer_race,
                 "year": footer_year
             },
-            "last_resolved_race": conv_state.get("last_race"),
+            "last_resolved_race": last_race_out,
             "model": "code",
             "fallback_reason": None,
             "timings_ms": collector.to_dict(),
