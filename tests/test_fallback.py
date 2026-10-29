@@ -221,7 +221,7 @@ def test_7_grep_test_no_api_keys_in_repo():
     # Directories and files to ignore during repo grep
     ignored_patterns = {
         ".git", ".venv", "__pycache__", ".pytest_cache", "node_modules",
-        "cache", "f1_cache", ".env", ".env.local"
+        "cache", "f1_cache", ".env", ".env.local", ".next"
     }
 
     # Use dynamically constructed prefix tokens to avoid matching this test file

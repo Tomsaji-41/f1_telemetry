@@ -6,7 +6,6 @@ import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { Sun, Moon, Sparkles } from "lucide-react";
 import { Logo } from "@/components/Logo";
 import { brand } from "@/config/brand";
-import { DEMO_LABEL, DEMO_MODE } from "@/demo/demoData";
 import en from "@/content/en.json";
 
 interface ScheduleRace {
@@ -34,6 +33,34 @@ export function Navbar(): React.JSX.Element {
   const [schedule, setSchedule] = useState<ScheduleRace[]>([]);
   const [latestRound, setLatestRound] = useState<number>(1);
   const [latestRaceName, setLatestRaceName] = useState<string>("");
+  const [availableYears, setAvailableYears] = useState<number[]>(
+    Array.from({ length: 12 }, (_, i) => currentYear - i)
+  );
+
+  // Fetch available sessions & latest completed round from backend
+  useEffect(() => {
+    fetch("/api/sessions/available")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!data) return;
+        if (Array.isArray(data.seasons) && data.seasons.length > 0) {
+          setAvailableYears(data.seasons.slice(0, 25));
+        }
+        if (data.latest_completed) {
+          setLatestRound(data.latest_completed.round);
+          setLatestRaceName(data.latest_completed.grand_prix || "");
+          if (!searchParams.get("year")) {
+            const params = new URLSearchParams(searchParams.toString());
+            params.set("year", String(data.latest_completed.year));
+            if (!searchParams.get("round")) {
+              params.set("round", String(data.latest_completed.round));
+            }
+            router.replace(`${pathname}?${params.toString()}`);
+          }
+        }
+      })
+      .catch(() => {});
+  }, [pathname, router, searchParams]);
 
   // Initialize and toggle theme
   useEffect(() => {
@@ -133,9 +160,6 @@ export function Navbar(): React.JSX.Element {
   const activeRound = roundParam ? parseInt(roundParam, 10) : latestRound;
   const isViewingLatest = activeRound === latestRound;
 
-  // Available years: 10 years back from current
-  const availableYears = Array.from({ length: 12 }, (_, i) => currentYear - i);
-
   return (
     <header className="sticky top-0 z-40 w-full h-14 bg-[var(--surface)] border-b border-[var(--border)] select-none">
       <div className="flex h-full items-center justify-between px-4 sm:px-6 max-w-[1480px] mx-auto gap-4">
@@ -223,17 +247,6 @@ export function Navbar(): React.JSX.Element {
 
         {/* Right Tools: Page-level "Data as of", Health Badge, Theme */}
         <div className="flex items-center gap-3">
-          {/* Demo Mode Badge */}
-          {DEMO_MODE && (
-            <div
-              className="flex items-center gap-1.5 px-3 py-1 text-[11px] font-mono text-amber-300 bg-amber-500/15 border border-amber-500/30 rounded-full font-medium"
-              title={DEMO_LABEL}
-            >
-              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
-              <span className="truncate max-w-[280px] sm:max-w-none">{DEMO_LABEL}</span>
-            </div>
-          )}
-
           {/* Page-level "Data as of <fetched_at>" */}
           <div
             className="hidden lg:flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-mono text-[var(--text-3)] bg-[var(--raised)] border border-[var(--border)] rounded"

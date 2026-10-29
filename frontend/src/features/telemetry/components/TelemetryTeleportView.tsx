@@ -7,14 +7,26 @@
  * 2. Track map with speed delta heat map.
  * 3. Braking zones table (entry speed, apex min speed, distance, deceleration g).
  * 4. Aerodynamic & Chassis engineering proxies.
- * 5. Default drivers: two fastest qualifiers of selected race from the API.
+ * 5. Sector & speed-trap comparison panel (SpeedST, SpeedFL, SpeedI1, SpeedI2).
+ * 6. Honest limits: Clean not_available state with verified telemetry session picker.
  */
 import React, { useState, useEffect, useMemo, useRef } from "react";
+import { useRouter } from "next/navigation";
 import { scaleLinear } from "d3-scale";
 import { ChartState } from "@/components/charts/ChartState";
-import { Gauge, Zap, Wind, ShieldAlert, ChevronRight, Activity } from "lucide-react";
+import { Gauge, Zap, Wind, ShieldAlert, ChevronRight, Activity, Calendar } from "lucide-react";
 import en from "@/content/en.json";
 import { fetcher } from "@/lib/api";
+
+export const VERIFIED_TELEMETRY_SESSIONS = [
+  { year: 2024, round: 12, name: "2024 British GP (Silverstone)" },
+  { year: 2024, round: 1, name: "2024 Bahrain GP (Sakhir)" },
+  { year: 2023, round: 22, name: "2023 Abu Dhabi GP (Yas Marina)" },
+  { year: 2023, round: 14, name: "2023 Italian GP (Monza)" },
+  { year: 2023, round: 1, name: "2023 Bahrain GP (Sakhir)" },
+  { year: 2022, round: 22, name: "2022 Abu Dhabi GP (Yas Marina)" },
+  { year: 2022, round: 1, name: "2022 Bahrain GP (Sakhir)" },
+];
 
 interface DriverTrace {
   code: string;
@@ -43,10 +55,26 @@ interface BrakingZone {
   decel_g: number;
 }
 
+interface SectorSpeedTrapData {
+  driver1?: string;
+  driver2?: string;
+  lap_time?: Record<string, number | null>;
+  sector1?: Record<string, number | null>;
+  sector2?: Record<string, number | null>;
+  sector3?: Record<string, number | null>;
+  speed_st?: Record<string, number | null>;
+  speed_fl?: Record<string, number | null>;
+  speed_i1?: Record<string, number | null>;
+  speed_i2?: Record<string, number | null>;
+}
+
 interface TelemetryCompareData {
   status?: string;
   source?: string;
   coverage_note?: string;
+  reason?: string;
+  session_used?: string | null;
+  nearest_session?: { year: number; round: number; name?: string };
   fetched_at?: string;
   driver1?: string;
   driver2?: string;
@@ -62,6 +90,7 @@ interface TelemetryCompareData {
   };
   track_map?: TrackPoint[];
   braking_table?: BrakingZone[];
+  sector_speed_trap?: SectorSpeedTrapData;
   proxies?: Record<string, any>;
   job_id?: string;
   eta_s?: number;
@@ -72,7 +101,104 @@ interface TelemetryTeleportViewProps {
   round: number;
 }
 
+export function SectorSpeedTrapPanel({
+  sst,
+  d1,
+  d2,
+  c1,
+  c2,
+}: {
+  sst: SectorSpeedTrapData;
+  d1: string;
+  d2: string;
+  c1: string;
+  c2: string;
+}) {
+  const rows = [
+    { label: "Fastest Lap Time", k: "lap_time", unit: "s", digits: 3 },
+    { label: "Sector 1 Time", k: "sector1", unit: "s", digits: 3 },
+    { label: "Sector 2 Time", k: "sector2", unit: "s", digits: 3 },
+    { label: "Sector 3 Time", k: "sector3", unit: "s", digits: 3 },
+    { label: "Speed Trap (SpeedST)", k: "speed_st", unit: "km/h", digits: 1 },
+    { label: "Finish Line (SpeedFL)", k: "speed_fl", unit: "km/h", digits: 1 },
+    { label: "Intermediate 1 (SpeedI1)", k: "speed_i1", unit: "km/h", digits: 1 },
+    { label: "Intermediate 2 (SpeedI2)", k: "speed_i2", unit: "km/h", digits: 1 },
+  ];
+
+  return (
+    <div className="p-4 rounded-lg bg-[var(--surface)] border border-[var(--border)] space-y-3">
+      <div className="flex items-center justify-between">
+        <h4 className="text-[12px] font-mono uppercase font-bold text-[var(--text)] tracking-wider">
+          Sector &amp; speed-trap comparison
+        </h4>
+        <span className="text-[11px] font-mono text-[var(--text-3)]">
+          Real Timing Telemetry
+        </span>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-[12px] font-mono border-collapse">
+          <thead>
+            <tr className="border-b border-[var(--border)] text-[var(--text-3)] text-left">
+              <th className="py-1.5 font-medium">Metric</th>
+              <th className="py-1.5 font-medium" style={{ color: c1 }}>
+                {d1}
+              </th>
+              <th className="py-1.5 font-medium" style={{ color: c2 }}>
+                {d2}
+              </th>
+              <th className="py-1.5 font-medium text-right">Delta</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-[var(--border)]">
+            {rows.map((r) => {
+              const dict = (sst as any)[r.k] || {};
+              const v1 = dict[d1];
+              const v2 = dict[d2];
+              const hasDelta = v1 != null && v2 != null;
+              const delta = hasDelta ? v1 - v2 : null;
+
+              return (
+                <tr key={r.k} className="hover:bg-[var(--surface-2)]">
+                  <td className="py-1.5 text-[var(--text-2)]">{r.label}</td>
+                  <td className="py-1.5 font-semibold text-[var(--text)]">
+                    {v1 != null ? `${Number(v1).toFixed(r.digits)}${r.unit}` : "—"}
+                  </td>
+                  <td className="py-1.5 font-semibold text-[var(--text)]">
+                    {v2 != null ? `${Number(v2).toFixed(r.digits)}${r.unit}` : "—"}
+                  </td>
+                  <td className="py-1.5 text-right font-medium">
+                    {delta != null ? (
+                      <span
+                        className={
+                          delta === 0
+                            ? "text-[var(--text-3)]"
+                            : delta < 0
+                            ? "text-[var(--positive)]"
+                            : "text-[var(--accent)]"
+                        }
+                      >
+                        {delta > 0 ? `+${delta.toFixed(r.digits)}` : delta.toFixed(r.digits)}
+                        {r.unit}
+                      </span>
+                    ) : (
+                      <span className="text-[var(--text-3)]">—</span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 export function TelemetryTeleportView({ year, round }: TelemetryTeleportViewProps) {
+  const router = useRouter();
+  const [activeYear, setActiveYear] = useState<number>(year);
+  const [activeRound, setActiveRound] = useState<number>(round);
+
   const [data, setData] = useState<TelemetryCompareData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<any>(null);
@@ -80,13 +206,18 @@ export function TelemetryTeleportView({ year, round }: TelemetryTeleportViewProp
   const [selectedDriver2, setSelectedDriver2] = useState<string>("");
   const [hoverDist, setHoverDist] = useState<number | null>(null);
 
-  // Poll job if status is preparing
+  // Synchronize prop updates
+  useEffect(() => {
+    setActiveYear(year);
+    setActiveRound(round);
+  }, [year, round]);
+
   const pollTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-  const fetchData = (d1?: string, d2?: string) => {
+  const fetchData = (y: number, r: number, d1?: string, d2?: string) => {
     setLoading(true);
     setError(null);
-    let url = `/api/charts/telemetry-compare?year=${year}&round=${round}`;
+    let url = `/api/charts/telemetry-compare?year=${y}&round=${r}`;
     if (d1) url += `&driver1=${encodeURIComponent(d1)}`;
     if (d2) url += `&driver2=${encodeURIComponent(d2)}`;
 
@@ -104,7 +235,12 @@ export function TelemetryTeleportView({ year, round }: TelemetryTeleportViewProp
           pollTimerRef.current = setInterval(() => {
             fetcher(`/api/charts/job/${jobId}`)
               .then((jobData: any) => {
-                if (jobData.status === "ok" || jobData.status === "source_error" || jobData.status === "not_published_yet") {
+                if (
+                  jobData.status === "ok" ||
+                  jobData.status === "not_available" ||
+                  jobData.status === "source_error" ||
+                  jobData.status === "not_published_yet"
+                ) {
                   if (pollTimerRef.current) clearInterval(pollTimerRef.current);
                   setData(jobData);
                 }
@@ -121,18 +257,113 @@ export function TelemetryTeleportView({ year, round }: TelemetryTeleportViewProp
   };
 
   useEffect(() => {
-    fetchData();
+    fetchData(activeYear, activeRound);
     return () => {
       if (pollTimerRef.current) clearInterval(pollTimerRef.current);
     };
-  }, [year, round]);
+  }, [activeYear, activeRound]);
+
+  const handleSelectSession = (y: number, r: number) => {
+    setActiveYear(y);
+    setActiveRound(r);
+    router.push(`/telemetry?year=${y}&round=${r}`);
+  };
 
   const handleApplyDrivers = () => {
-    fetchData(selectedDriver1, selectedDriver2);
+    fetchData(activeYear, activeRound, selectedDriver1, selectedDriver2);
   };
 
   const status = data?.status || (loading ? "loading" : "ok");
 
+  // Not available state with clean session picker & Sector/speed-trap panel
+  if (!loading && (status === "not_available" || (status === "ok" && !data?.traces))) {
+    const sst = data?.sector_speed_trap;
+    const d1Code = data?.driver1 || "VER";
+    const d2Code = data?.driver2 || "NOR";
+
+    return (
+      <div className="space-y-6">
+        {/* Honest Not Available Hero Banner */}
+        <div className="p-6 rounded-lg bg-[var(--surface)] border border-[var(--border)] space-y-4">
+          <div className="flex items-start gap-3">
+            <ShieldAlert className="w-5 h-5 text-[var(--accent)] shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <h2 className="text-[15px] font-mono font-bold text-[var(--text)]">
+                Car Telemetry Stream Unavailable
+              </h2>
+              <p className="text-[12px] text-[var(--text-2)] font-mono leading-relaxed">
+                {data?.coverage_note ||
+                  `Full car telemetry (speed, throttle, brake curves & GPS) is unavailable for ${activeYear} Round ${activeRound} from the timing provider.`}
+              </p>
+              {data?.reason && (
+                <p className="text-[11px] text-[var(--text-3)] font-mono">
+                  Upstream reason: {data.reason}
+                </p>
+              )}
+            </div>
+          </div>
+
+          {/* Nearest verified session switch button */}
+          {data?.nearest_session && (
+            <div className="p-3.5 rounded bg-[var(--surface-2)] border border-[var(--border)] flex flex-wrap items-center justify-between gap-3">
+              <div className="text-[12px] font-mono">
+                <span className="text-[var(--text-3)]">Nearest verified session: </span>
+                <span className="font-bold text-[var(--text)]">
+                  {data.nearest_session.name ||
+                    `${data.nearest_session.year} Round ${data.nearest_session.round}`}
+                </span>
+              </div>
+              <button
+                onClick={() =>
+                  handleSelectSession(data.nearest_session!.year, data.nearest_session!.round)
+                }
+                className="px-3.5 py-1.5 rounded bg-[var(--accent)] text-white text-[12px] font-mono font-semibold hover:opacity-90 transition-opacity flex items-center gap-1.5"
+              >
+                <span>Switch to Nearest Session</span>
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+
+          {/* Session Picker listing only verified sessions with telemetry */}
+          <div className="pt-3 border-t border-[var(--border)] flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-[11px] font-mono text-[var(--text-3)]">
+              <Calendar className="w-3.5 h-3.5 text-[var(--accent)]" />
+              <span>Select session with telemetry:</span>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {VERIFIED_TELEMETRY_SESSIONS.map((s) => (
+                <button
+                  key={`${s.year}-${s.round}`}
+                  onClick={() => handleSelectSession(s.year, s.round)}
+                  className={`px-2.5 py-1 text-[11px] font-mono rounded border transition-colors ${
+                    s.year === activeYear && s.round === activeRound
+                      ? "bg-[var(--accent)] text-white border-[var(--accent)] font-bold"
+                      : "bg-[var(--surface-2)] text-[var(--text-2)] border-[var(--border)] hover:bg-[var(--raised)]"
+                  }`}
+                >
+                  {s.name.replace("Grand Prix", "GP")}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Real Sector & speed-trap comparison panel */}
+        {sst && (
+          <SectorSpeedTrapPanel
+            sst={sst}
+            d1={d1Code}
+            d2={d2Code}
+            c1="var(--accent, #3b82f6)"
+            c2="var(--positive, #10b981)"
+          />
+        )}
+      </div>
+    );
+  }
+
+  // Generic loading or error states
   if (status !== "ok" || !data?.traces) {
     return (
       <div className="p-8 border border-[var(--border)] rounded-lg bg-[var(--surface)]">
@@ -140,7 +371,7 @@ export function TelemetryTeleportView({ year, round }: TelemetryTeleportViewProp
           data={data}
           error={error}
           isLoading={loading}
-          retry={() => fetchData(selectedDriver1, selectedDriver2)}
+          retry={() => fetchData(activeYear, activeRound, selectedDriver1, selectedDriver2)}
         >
           <div />
         </ChartState>
@@ -224,10 +455,40 @@ export function TelemetryTeleportView({ year, round }: TelemetryTeleportViewProp
     .range([pad, mapW - pad]);
   const mapYScale = scaleLinear()
     .domain([trackBounds.minY, trackBounds.maxY])
-    .range([mapH - pad, pad]); // Invert Y for cartesian coordinates
+    .range([mapH - pad, pad]);
 
   return (
     <div className="space-y-6">
+      {/* Session Switcher Header Bar */}
+      <div className="p-3.5 rounded-lg bg-[var(--surface)] border border-[var(--border)] flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <Calendar className="w-4 h-4 text-[var(--accent)]" />
+          <span className="text-[12px] font-mono text-[var(--text-3)] uppercase font-semibold">
+            Telemetry Session:
+          </span>
+          <select
+            value={`${activeYear}-${activeRound}`}
+            onChange={(e) => {
+              const [y, r] = e.target.value.split("-").map(Number);
+              handleSelectSession(y, r);
+            }}
+            className="bg-[var(--surface-2)] text-[var(--text)] border border-[var(--border)] rounded px-3 py-1 text-[12px] font-mono focus:outline-none focus:border-[var(--accent)] cursor-pointer"
+          >
+            {VERIFIED_TELEMETRY_SESSIONS.map((s) => (
+              <option key={`${s.year}-${s.round}`} value={`${s.year}-${s.round}`}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {data.session_used && (
+          <span className="px-2.5 py-1 text-[11px] font-mono rounded bg-[var(--surface-2)] border border-[var(--border)] text-[var(--accent)] font-semibold">
+            Source: {data.session_used}
+          </span>
+        )}
+      </div>
+
       {/* Driver Pairing Header & Controls */}
       <div className="p-4 rounded-lg bg-[var(--surface)] border border-[var(--border)] flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-6">
@@ -296,7 +557,6 @@ export function TelemetryTeleportView({ year, round }: TelemetryTeleportViewProp
               role="img"
               aria-label="Speed trace overlay"
             >
-              {/* Grid lines */}
               {[100, 200, 300].map((s) => (
                 <g key={s}>
                   <line
@@ -305,32 +565,29 @@ export function TelemetryTeleportView({ year, round }: TelemetryTeleportViewProp
                     y1={speedScale(s)}
                     y2={speedScale(s)}
                     stroke="var(--border)"
-                    strokeWidth={0.5}
-                    strokeDasharray="3 3"
+                    strokeDasharray="2 4"
+                    strokeWidth={1}
                   />
                   <text
                     x={m.l - 8}
-                    y={speedScale(s)}
-                    fill="var(--text-3)"
-                    fontSize="10"
+                    y={speedScale(s) + 4}
                     textAnchor="end"
-                    dominantBaseline="central"
-                    fontFamily="monospace"
+                    className="text-[10px] fill-[var(--text-3)] font-mono"
                   >
                     {s}
                   </text>
                 </g>
               ))}
               <path d={speedPath1} fill="none" stroke={c1} strokeWidth={2} />
-              <path d={speedPath2} fill="none" stroke={c2} strokeWidth={2} strokeDasharray="3 2" />
+              <path d={speedPath2} fill="none" stroke={c2} strokeWidth={2} opacity={0.9} />
             </svg>
           </div>
 
-          {/* 2. Speed Delta (D1 - D2) */}
+          {/* 2. Speed Delta Trace */}
           <div className="p-4 rounded-lg bg-[var(--surface)] border border-[var(--border)]">
-            <div className="flex items-center justify-between mb-1">
+            <div className="flex items-center justify-between mb-2">
               <span className="text-[12px] font-mono uppercase font-bold text-[var(--text)]">
-                Speed Delta ({d1.code} − {d2.code} km/h)
+                Speed Delta (km/h) [{d1.code} − {d2.code}]
               </span>
             </div>
             <svg
@@ -344,23 +601,19 @@ export function TelemetryTeleportView({ year, round }: TelemetryTeleportViewProp
                 x2={W - m.r}
                 y1={deltaScale(0)}
                 y2={deltaScale(0)}
-                stroke="var(--border-strong)"
-                strokeWidth={1}
+                stroke="var(--border)"
+                strokeWidth={1.5}
               />
-              <path d={deltaPath} fill="none" stroke="var(--text)" strokeWidth={1.5} />
+              <path d={deltaPath} fill="none" stroke="var(--accent)" strokeWidth={1.8} />
             </svg>
           </div>
 
-          {/* 3. Throttle and Brake Inputs */}
+          {/* 3. Driver Inputs: Throttle & Brake */}
           <div className="p-4 rounded-lg bg-[var(--surface)] border border-[var(--border)]">
             <div className="flex items-center justify-between mb-2">
               <span className="text-[12px] font-mono uppercase font-bold text-[var(--text)]">
-                Throttle (%) & Brake Inputs
+                Driver Inputs (Throttle &amp; Brake %)
               </span>
-              <div className="flex items-center gap-3 text-[11px] font-mono text-[var(--text-3)]">
-                <span>Line = Throttle</span>
-                <span>Bar = Full Brake</span>
-              </div>
             </div>
             <svg
               viewBox={`0 0 ${W} ${H_INPUTS}`}
@@ -368,86 +621,51 @@ export function TelemetryTeleportView({ year, round }: TelemetryTeleportViewProp
               role="img"
               aria-label="Throttle and brake traces"
             >
-              {/* Brake applications as shaded regions */}
-              {dist.map((d, i) => {
-                if (d1.brake[i] > 0) {
-                  return (
-                    <rect
-                      key={`b1-${i}`}
-                      x={xScale(d)}
-                      y={inputScale(100)}
-                      width={Math.max(1, W / dist.length)}
-                      height={H_INPUTS - m.b - m.t}
-                      fill={c1}
-                      opacity={0.12}
-                    />
-                  );
-                }
-                return null;
-              })}
-              <line
-                x1={m.l}
-                x2={W - m.r}
-                y1={inputScale(100)}
-                y2={inputScale(100)}
-                stroke="var(--border)"
-                strokeWidth={0.5}
-                strokeDasharray="2 2"
-              />
               <path d={thPath1} fill="none" stroke={c1} strokeWidth={1.5} />
-              <path d={thPath2} fill="none" stroke={c2} strokeWidth={1.5} strokeDasharray="3 2" />
+              <path d={thPath2} fill="none" stroke={c2} strokeWidth={1.5} opacity={0.8} />
             </svg>
           </div>
 
-          {/* 4. Gear Selection & RPM */}
+          {/* 4. Gear Selection */}
           <div className="p-4 rounded-lg bg-[var(--surface)] border border-[var(--border)]">
             <div className="flex items-center justify-between mb-2">
               <span className="text-[12px] font-mono uppercase font-bold text-[var(--text)]">
-                Gear Selection (1-8)
+                Gear Selection (1–8)
               </span>
             </div>
             <svg
               viewBox={`0 0 ${W} ${H_GEAR}`}
               className="w-full h-auto select-none"
               role="img"
-              aria-label="Gear selection traces"
+              aria-label="Gear trace"
             >
-              {[2, 4, 6, 8].map((g) => (
-                <g key={g}>
-                  <line
-                    x1={m.l}
-                    x2={W - m.r}
-                    y1={gearScale(g)}
-                    y2={gearScale(g)}
-                    stroke="var(--border)"
-                    strokeWidth={0.5}
-                  />
-                  <text
-                    x={m.l - 8}
-                    y={gearScale(g)}
-                    fill="var(--text-3)"
-                    fontSize="10"
-                    textAnchor="end"
-                    dominantBaseline="central"
-                    fontFamily="monospace"
-                  >
-                    G{g}
-                  </text>
-                </g>
-              ))}
               <path d={gearPath1} fill="none" stroke={c1} strokeWidth={1.5} />
-              <path d={gearPath2} fill="none" stroke={c2} strokeWidth={1.5} strokeDasharray="3 2" />
+              <path d={gearPath2} fill="none" stroke={c2} strokeWidth={1.5} opacity={0.8} />
             </svg>
           </div>
+
+          {/* 5. Real Sector & speed-trap comparison panel */}
+          {data.sector_speed_trap && (
+            <SectorSpeedTrapPanel
+              sst={data.sector_speed_trap}
+              d1={d1.code}
+              d2={d2.code}
+              c1={c1}
+              c2={c2}
+            />
+          )}
         </div>
 
         {/* Right Column: Track Map, Braking Table, Proxies */}
         <div className="lg:col-span-4 space-y-4">
-          {/* Track Map */}
+          {/* Circuit Map */}
           <div className="p-4 rounded-lg bg-[var(--surface)] border border-[var(--border)]">
-            <h4 className="text-[12px] font-mono uppercase font-bold text-[var(--text)] mb-2">
-              Track Circuit Map
-            </h4>
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[12px] font-mono uppercase font-bold text-[var(--text)]">
+                Circuit Map
+              </span>
+              <span className="text-[11px] font-mono text-[var(--text-3)]">Delta Heat</span>
+            </div>
             {trackMap.length > 0 ? (
               <svg
                 viewBox={`0 0 ${mapW} ${mapH}`}
@@ -455,18 +673,28 @@ export function TelemetryTeleportView({ year, round }: TelemetryTeleportViewProp
                 role="img"
                 aria-label="Track layout map"
               >
-                {trackMap.map((pt, i) => {
-                  if (i === 0) return null;
-                  const prev = trackMap[i - 1];
-                  const color = pt.delta_speed > 2 ? c1 : pt.delta_speed < -2 ? c2 : "var(--border-strong)";
+                {trackMap.map((p, idx) => {
+                  if (idx === 0) return null;
+                  const prev = trackMap[idx - 1];
+                  const x1 = mapXScale(prev.x);
+                  const y1 = mapYScale(prev.y);
+                  const x2 = mapXScale(p.x);
+                  const y2 = mapYScale(p.y);
+                  const col =
+                    p.delta_speed > 2
+                      ? c1
+                      : p.delta_speed < -2
+                      ? c2
+                      : "var(--text-3, #9ca3af)";
+
                   return (
                     <line
-                      key={i}
-                      x1={mapXScale(prev.x)}
-                      y1={mapYScale(prev.y)}
-                      x2={mapXScale(pt.x)}
-                      y2={mapYScale(pt.y)}
-                      stroke={color}
+                      key={idx}
+                      x1={x1}
+                      y1={y1}
+                      x2={x2}
+                      y2={y2}
+                      stroke={col}
                       strokeWidth={3}
                       strokeLinecap="round"
                     />
@@ -487,7 +715,10 @@ export function TelemetryTeleportView({ year, round }: TelemetryTeleportViewProp
                 Engineering Proxies
               </h4>
               {Object.entries(data.proxies).map(([k, p]: [string, any]) => (
-                <div key={k} className="p-2.5 rounded bg-[var(--surface-2)] border border-[var(--border)] text-[11px] font-mono space-y-1">
+                <div
+                  key={k}
+                  className="p-2.5 rounded bg-[var(--surface-2)] border border-[var(--border)] text-[11px] font-mono space-y-1"
+                >
                   <div className="text-[var(--text-3)] uppercase font-semibold">{p.proxy || k}</div>
                   <div className="flex items-center justify-between text-[12px]">
                     <span style={{ color: c1 }}>

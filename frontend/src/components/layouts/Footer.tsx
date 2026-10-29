@@ -3,7 +3,6 @@
 import React, { useEffect, useState } from "react";
 import { Logo } from "@/components/Logo";
 import { brand } from "@/config/brand";
-import { DEMO_LABEL, DEMO_MODE } from "@/demo/demoData";
 
 export function AppFooter({ buildStamp }: { buildStamp?: string }) {
   const [fetchedAt, setFetchedAt] = useState<string>("");
@@ -63,11 +62,6 @@ export function AppFooter({ buildStamp }: { buildStamp?: string }) {
         </div>
 
         {/* Mandatory Legal Disclaimer on every page */}
-        {DEMO_MODE && (
-          <p className="text-[11px] font-mono text-amber-300 bg-amber-500/10 px-3 py-1 border border-amber-500/20 rounded max-w-2xl mt-1">
-            {DEMO_LABEL}
-          </p>
-        )}
         <p className="text-[10px] text-[var(--text-3)] max-w-2xl leading-relaxed mt-1">
           {brand.disclaimer}
         </p>

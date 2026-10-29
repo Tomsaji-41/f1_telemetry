@@ -1,0 +1,225 @@
+{
+  "status": "ok",
+  "year": 2024,
+  "total_rounds": 24,
+  "schedule": [
+    {
+      "round": 1,
+      "grand_prix": "Bahrain Grand Prix",
+      "circuit_id": "bahrain",
+      "circuit_name": "Bahrain International Circuit",
+      "locality": "Sakhir",
+      "country": "Bahrain",
+      "date": "2024-03-02"
+    },
+    {
+      "round": 2,
+      "grand_prix": "Saudi Arabian Grand Prix",
+      "circuit_id": "jeddah",
+      "circuit_name": "Jeddah Corniche Circuit",
+      "locality": "Jeddah",
+      "country": "Saudi Arabia",
+      "date": "2024-03-09"
+    },
+    {
+      "round": 3,
+      "grand_prix": "Australian Grand Prix",
+      "circuit_id": "albert_park",
+      "circuit_name": "Albert Park Grand Prix Circuit",
+      "locality": "Melbourne",
+      "country": "Australia",
+      "date": "2024-03-24"
+    },
+    {
+      "round": 4,
+      "grand_prix": "Japanese Grand Prix",
+      "circuit_id": "suzuka",
+      "circuit_name": "Suzuka Circuit",
+      "locality": "Suzuka",
+      "country": "Japan",
+      "date": "2024-04-07"
+    },
+    {
+      "round": 5,
+      "grand_prix": "Chinese Grand Prix",
+      "circuit_id": "shanghai",
+      "circuit_name": "Shanghai International Circuit",
+      "locality": "Shanghai",
+      "country": "China",
+      "date": "2024-04-21"
+    },
+    {
+      "round": 6,
+      "grand_prix": "Miami Grand Prix",
+      "circuit_id": "miami",
+      "circuit_name": "Miami International Autodrome",
+      "locality": "Miami",
+      "country": "USA",
+      "date": "2024-05-05"
+    },
+    {
+      "round": 7,
+      "grand_prix": "Emilia Romagna Grand Prix",
+      "circuit_id": "imola",
+      "circuit_name": "Autodromo Enzo e Dino Ferrari",
+      "locality": "Imola",
+      "country": "Italy",
+      "date": "2024-05-19"
+    },
+    {
+      "round": 8,
+      "grand_prix": "Monaco Grand Prix",
+      "circuit_id": "monaco",
+      "circuit_name": "Circuit de Monaco",
+      "locality": "Monte Carlo",
+      "country": "Monaco",
+      "date": "2024-05-26"
+    },
+    {
+      "round": 9,
+      "grand_prix": "Canadian Grand Prix",
+      "circuit_id": "villeneuve",
+      "circuit_name": "Circuit Gilles Villeneuve",
+      "locality": "Montreal",
+      "country": "Canada",
+      "date": "2024-06-09"
+    },
+    {
+      "round": 10,
+      "grand_prix": "Spanish Grand Prix",
+      "circuit_id": "catalunya",
+      "circuit_name": "Circuit de Barcelona-Catalunya",
+      "locality": "Barcelona",
+      "country": "Spain",
+      "date": "2024-06-23"
+    },
+    {
+      "round": 11,
+      "grand_prix": "Austrian Grand Prix",
+      "circuit_id": "red_bull_ring",
+      "circuit_name": "Red Bull Ring",
+      "locality": "Spielberg",
+      "country": "Austria",
+      "date": "2024-06-30"
+    },
+    {
+      "round": 12,
+      "grand_prix": "British Grand Prix",
+      "circuit_id": "silverstone",
+      "circuit_name": "Silverstone Circuit",
+      "locality": "Silverstone",
+      "country": "UK",
+      "date": "2024-07-07"
+    },
+    {
+      "round": 13,
+      "grand_prix": "Hungarian Grand Prix",
+      "circuit_id": "hungaroring",
+      "circuit_name": "Hungaroring",
+      "locality": "Budapest",
+      "country": "Hungary",
+      "date": "2024-07-21"
+    },
+    {
+      "round": 14,
+      "grand_prix": "Belgian Grand Prix",
+      "circuit_id": "spa",
+      "circuit_name": "Circuit de Spa-Francorchamps",
+      "locality": "Spa",
+      "country": "Belgium",
+      "date": "2024-07-28"
+    },
+    {
+      "round": 15,
+      "grand_prix": "Dutch Grand Prix",
+      "circuit_id": "zandvoort",
+      "circuit_name": "Circuit Park Zandvoort",
+      "locality": "Zandvoort",
+      "country": "Netherlands",
+      "date": "2024-08-25"
+    },
+    {
+      "round": 16,
+      "grand_prix": "Italian Grand Prix",
+      "circuit_id": "monza",
+      "circuit_name": "Autodromo Nazionale di Monza",
+      "locality": "Monza",
+      "country": "Italy",
+      "date": "2024-09-01"
+    },
+    {
+      "round": 17,
+      "grand_prix": "Azerbaijan Grand Prix",
+      "circuit_id": "baku",
+      "circuit_name": "Baku City Circuit",
+      "locality": "Baku",
+      "country": "Azerbaijan",
+      "date": "2024-09-15"
+    },
+    {
+      "round": 18,
+      "grand_prix": "Singapore Grand Prix",
+      "circuit_id": "marina_bay",
+      "circuit_name": "Marina Bay Street Circuit",
+      "locality": "Marina Bay",
+      "country": "Singapore",
+      "date": "2024-09-22"
+    },
+    {
+      "round": 19,
+      "grand_prix": "United States Grand Prix",
+      "circuit_id": "americas",
+      "circuit_name": "Circuit of the Americas",
+      "locality": "Austin",
+      "country": "USA",
+      "date": "2024-10-20"
+    },
+    {
+      "round": 20,
+      "grand_prix": "Mexico City Grand Prix",
+      "circuit_id": "rodriguez",
+      "circuit_name": "Aut\u00f3dromo Hermanos Rodr\u00edguez",
+      "locality": "Mexico City",
+      "country": "Mexico",
+      "date": "2024-10-27"
+    },
+    {
+      "round": 21,
+      "grand_prix": "S\u00e3o Paulo Grand Prix",
+      "circuit_id": "interlagos",
+      "circuit_name": "Aut\u00f3dromo Jos\u00e9 Carlos Pace",
+      "locality": "S\u00e3o Paulo",
+      "country": "Brazil",
+      "date": "2024-11-03"
+    },
+    {
+      "round": 22,
+      "grand_prix": "Las Vegas Grand Prix",
+      "circuit_id": "vegas",
+      "circuit_name": "Las Vegas Strip Street Circuit",
+      "locality": "Las Vegas",
+      "country": "USA",
+      "date": "2024-11-23"
+    },
+    {
+      "round": 23,
+      "grand_prix": "Qatar Grand Prix",
+      "circuit_id": "losail",
+      "circuit_name": "Lusail International Circuit",
+      "locality": "Lusail",
+      "country": "Qatar",
+      "date": "2024-12-01"
+    },
+    {
+      "round": 24,
+      "grand_prix": "Abu Dhabi Grand Prix",
+      "circuit_id": "yas_marina",
+      "circuit_name": "Yas Marina Circuit",
+      "locality": "Abu Dhabi",
+      "country": "UAE",
+      "date": "2024-12-08"
+    }
+  ],
+  "source": "Jolpica",
+  "coverage_note": "Schedules available from 1950 to present."
+}

@@ -7,19 +7,21 @@ load_dotenv(BASE_DIR / ".env", override=True)
 
 def _clean(v):
     v = (v or "").strip()
+    if (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'")):
+        v = v[1:-1].strip()
     return "" if v.startswith("<") else v
 
 GEMINI_API_KEY = _clean(os.getenv("GEMINI_API_KEY"))
 GROQ_API_KEY = _clean(os.getenv("GROQ_API_KEY"))
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+GEMINI_MODEL = _clean(os.getenv("GEMINI_MODEL", "gemini-2.5-flash")) or "gemini-2.5-flash"
+GROQ_MODEL = _clean(os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")) or "llama-3.3-70b-versatile"
 GEMINI_FIRST_TOKEN_TIMEOUT_S = float(os.getenv("GEMINI_FIRST_TOKEN_TIMEOUT_S", "3"))
 GEMINI_TOTAL_TIMEOUT_S = float(os.getenv("GEMINI_TOTAL_TIMEOUT_S", "8"))
 CACHE_DIR = BASE_DIR / "f1_cache"
 CACHE_DIR.mkdir(exist_ok=True)
 DB_PATH = BASE_DIR / "cache.sqlite"
 
-BACKEND_HOST = os.getenv("BACKEND_HOST", "0.0.0.0")
+BACKEND_HOST = os.getenv("BACKEND_HOST", "127.0.0.1")
 BACKEND_PORT = int(os.getenv("BACKEND_PORT", 8000))
 
 # Chart / telemetry constants (not F1 facts — pure model/config knobs)

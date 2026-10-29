@@ -35,3 +35,4 @@ describe("Chart Loading Timeout and Retry (Vitest)", () => {
     expect(handleRetry).toHaveBeenCalledTimes(1);
   });
 });
+

@@ -181,9 +181,11 @@ export function DriverChip({
 export function EmptyState({
   message = "No telemetry records found for current parameters.",
   reason,
+  title,
 }: {
   message?: string;
   reason?: string;
+  title?: string;
 }) {
   return (
     <div className="flex flex-col items-center justify-center py-12 px-4 text-center border border-dashed border-[var(--border)] rounded-lg bg-[var(--surface)]">
@@ -192,6 +194,7 @@ export function EmptyState({
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
         </svg>
       </div>
+      {title && <h3 className="text-[15px] font-semibold text-[var(--text)] mb-1">{title}</h3>}
       <p className="text-[14px] font-medium text-[var(--text-2)]">{message}</p>
       {reason && <p className="text-[12px] text-[var(--text-3)] mt-1">{reason}</p>}
     </div>
@@ -203,17 +206,25 @@ export function ErrorState({
   url,
   status,
   onRetry,
+  title,
+  source,
 }: {
   message?: string;
   url?: string;
   status?: number | string;
   onRetry?: () => void;
+  title?: string;
+  source?: string;
 }) {
   return (
     <div className="flex flex-col items-center justify-center py-8 px-4 text-center border border-red-500/20 rounded-lg bg-red-500/5">
+      {title && <h3 className="text-[15px] font-semibold text-[var(--negative)] mb-1">{title}</h3>}
       <p className="text-[14px] text-[var(--negative)] font-medium">
-        {message.includes("Cannot reach the data service") ? message : `Cannot reach the data service. Retry${status ? ` (${status})` : ""}`}
+        {message}
       </p>
+      {source && (
+        <p className="text-[12px] text-[var(--text-3)] mt-0.5">Source: {source}</p>
+      )}
       {(url || status) && (
         <p className="text-[12px] font-mono text-[var(--text-3)] mt-1.5 break-all">
           {url ? `URL: ${url}` : ""} {status ? `[Status: ${status}]` : ""}

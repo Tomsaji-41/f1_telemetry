@@ -1,351 +1,614 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
   Radio,
   Play,
   Pause,
   SkipBack,
   SkipForward,
-  Flag,
-  AlertTriangle,
-  Info,
-  Clock,
-  Layers,
 } from "lucide-react";
 import { Panel, Stat } from "@/components/primitives/kit";
-import {
-  DEMO_MODE,
-  DEMO_LABEL,
-  DEMO_RACE,
-  DRIVERS,
-  teamById,
-  driverByCode,
-  getRace,
-  weatherAt,
-  fmtLap,
-  COMPOUND_COLOR,
-  COMPOUND_NAME,
-} from "@/demo/demoData";
+import { fetcher } from "@/lib/api";
+
+interface ReplayLeaderboardRow {
+  pos: number;
+  driver: string;
+  code: string;
+  team: string;
+  team_color: string;
+  gap?: string;
+  interval?: string;
+  compound?: string;
+  tyre_life?: number;
+  last_lap?: string;
+  is_pit?: boolean;
+}
+
+interface ReplayWeather {
+  air_temp?: string;
+  track_temp?: string;
+  humidity?: string;
+  wind_speed?: string;
+  rainfall?: boolean;
+}
+
+interface LapData {
+  lap: number;
+  track_status: string;
+  weather?: ReplayWeather | null;
+  leaderboard: ReplayLeaderboardRow[];
+}
+
+interface ReplayBundle {
+  status: string;
+  source: string;
+  year: number;
+  round: number;
+  grand_prix: string;
+  circuit_name: string;
+  total_laps: number;
+  drivers: Record<string, { code: string; name: string; team: string; team_color: string; number?: string; dash?: string }>;
+  pit_events: Array<{ driver: string; code: string; lap: number; stop: number; duration: string }>;
+  laps: Record<string | number, LapData>;
+  chart_data: {
+    laps: number[];
+    positions: Record<string, number[]>;
+    lap_times: Record<string, (number | null)[]>;
+  };
+}
 
 export default function LiveFeedPage(): React.JSX.Element {
+  const [isLive, setIsLive] = useState<boolean>(false);
   const [currentLap, setCurrentLap] = useState<number>(1);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
+  const [bundle, setBundle] = useState<ReplayBundle | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
+  const [chartMetric, setChartMetric] = useState<"positions" | "lap_times">("positions");
 
-  const race = useMemo(() => getRace(), []);
-  const currentWeather = useMemo(() => weatherAt(currentLap), [currentLap]);
+  // Chart container ref for responsive sizing
+  const chartSvgRef = useRef<SVGSVGElement>(null);
+  const [chartWidth, setChartWidth] = useState<number>(800);
 
-  // Scrubber playback
   useEffect(() => {
-    if (!isPlaying) return;
+    function handleResize() {
+      if (chartSvgRef.current) {
+        setChartWidth(chartSvgRef.current.clientWidth || 800);
+      }
+    }
+    handleResize();
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, [bundle]);
+
+  // Initial load: check live status then fetch replay bundle ONCE
+  useEffect(() => {
+    let mounted = true;
+
+    async function initFeed() {
+      setLoading(true);
+      setError(null);
+      try {
+        const statusRes = await fetcher<{ status: string; is_live: boolean; mode: string }>("/api/live/status").catch(() => null);
+        if (!mounted) return;
+
+        if (statusRes && statusRes.is_live) {
+          setIsLive(true);
+          setLoading(false);
+        } else {
+          setIsLive(false);
+          // Fetch complete session replay bundle once
+          const replayRes = await fetcher<ReplayBundle>("/api/replay/bundle").catch((err) => {
+            throw new Error(`Failed to load session replay: ${err.message || err}`);
+          });
+
+          if (!mounted) return;
+
+          if (replayRes && replayRes.status === "ok") {
+            setBundle(replayRes);
+            setCurrentLap(1);
+          } else {
+            setError((replayRes as any)?.reason || "Replay telemetry data not available for this session.");
+          }
+          setLoading(false);
+        }
+      } catch (err: any) {
+        if (mounted) {
+          setError(err?.message || "Failed to initialize telemetry feed.");
+          setLoading(false);
+        }
+      }
+    }
+
+    initFeed();
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  // Playback loop in memory (zero network requests)
+  useEffect(() => {
+    if (!isPlaying || isLive || !bundle) return;
+    const total = bundle.total_laps || 1;
     const interval = setInterval(() => {
       setCurrentLap((prev) => {
-        if (prev >= DEMO_RACE.laps) {
+        if (prev >= total) {
           setIsPlaying(false);
-          return DEMO_RACE.laps;
+          return total;
         }
         return prev + 1;
       });
     }, 1200);
     return () => clearInterval(interval);
-  }, [isPlaying]);
+  }, [isPlaying, isLive, bundle]);
 
-  // Leaderboard data for currentLap
-  const leaderboard = useMemo(() => {
-    const posRow = race.positionsByLap[currentLap - 1] || {};
-    const gapRow = race.gapByLap[currentLap - 1] || {};
+  const totalLaps = bundle?.total_laps || 1;
+  const currentLapData = useMemo(() => {
+    if (!bundle || !bundle.laps) return null;
+    return bundle.laps[currentLap] || bundle.laps[String(currentLap)] || null;
+  }, [bundle, currentLap]);
 
-    const rows = DRIVERS.map((d) => {
-      const pos = posRow[d.code];
-      const gap = gapRow[d.code];
-      const team = teamById(d.team);
-      const lapsForDriver = race.laps[d.code] || [];
-      const currentLapData = lapsForDriver.find((l) => l.lap === currentLap);
-      const isRetired = d.retire !== undefined && currentLap > d.retire;
+  const leaderboard = currentLapData?.leaderboard || [];
+  const trackStatus = currentLapData?.track_status || (isLive ? "GREEN" : "CHEQUERED");
+  const weather = currentLapData?.weather || null;
 
-      // Current stint & tyre
-      const currentStint = race.stints.find(
-        (s) => s.driver === d.code && currentLap >= s.startLap && currentLap <= s.endLap
-      );
-      const pitCount = race.pits.filter(
-        (p) => p.driver === d.code && p.lap <= currentLap
-      ).length;
+  // Track status badges
+  const trackStatusDisplay = useMemo(() => {
+    switch (trackStatus) {
+      case "GREEN":
+        return { label: "GREEN FLAG", color: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30" };
+      case "YELLOW":
+        return { label: "YELLOW FLAG", color: "bg-amber-500/15 text-amber-400 border-amber-500/30" };
+      case "SC":
+        return { label: "SAFETY CAR", color: "bg-amber-500/25 text-amber-300 border-amber-500/50" };
+      case "VSC":
+        return { label: "VIRTUAL SC", color: "bg-indigo-500/20 text-indigo-300 border-indigo-500/40" };
+      case "RED":
+        return { label: "RED FLAG", color: "bg-red-500/25 text-red-400 border-red-500/50" };
+      case "CHEQUERED":
+        return { label: "CHEQUERED FLAG", color: "bg-zinc-500/20 text-zinc-200 border-zinc-500/40" };
+      default:
+        return { label: trackStatus, color: "bg-zinc-500/20 text-zinc-300 border-zinc-500/30" };
+    }
+  }, [trackStatus]);
 
-      return {
-        driver: d,
-        team,
-        pos: isRetired ? null : pos,
-        gapVal: gap,
-        isRetired,
-        retireLap: d.retire,
-        compound: currentStint?.compound ?? "M",
-        tyreAge: currentLapData?.tyreAge ?? 1,
-        lastLapTime: currentLapData?.time ? fmtLap(currentLapData.time) : "IN PIT",
-        s1: currentLapData?.s1 ? currentLapData.s1.toFixed(3) : "-",
-        s2: currentLapData?.s2 ? currentLapData.s2.toFixed(3) : "-",
-        s3: currentLapData?.s3 ? currentLapData.s3.toFixed(3) : "-",
-        pitCount,
-      };
-    });
+  // Tyre compound styling
+  function getCompoundBadge(compound?: string) {
+    const comp = (compound || "MEDIUM").toUpperCase();
+    let bg = "bg-yellow-500/20 text-yellow-400 border-yellow-500/40";
+    let letter = "M";
+    if (comp.includes("SOFT")) {
+      bg = "bg-red-500/20 text-red-400 border-red-500/40";
+      letter = "S";
+    } else if (comp.includes("HARD")) {
+      bg = "bg-zinc-200/20 text-zinc-100 border-zinc-200/40";
+      letter = "H";
+    } else if (comp.includes("INTER")) {
+      bg = "bg-emerald-500/20 text-emerald-400 border-emerald-500/40";
+      letter = "I";
+    } else if (comp.includes("WET")) {
+      bg = "bg-blue-500/20 text-blue-400 border-blue-500/40";
+      letter = "W";
+    }
+    return { bg, letter, full: comp };
+  }
 
-    // Sort: active drivers first by position, then retired
-    rows.sort((a, b) => {
-      if (a.isRetired && !b.isRetired) return 1;
-      if (!a.isRetired && b.isRetired) return -1;
-      if (a.pos !== null && b.pos !== null) return a.pos - b.pos;
-      return 0;
-    });
+  // Scrub via clicking chart
+  const handleChartClick = (e: React.MouseEvent<SVGSVGElement>) => {
+    if (!bundle || totalLaps <= 1) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const paddingLeft = 45;
+    const paddingRight = 45;
+    const chartAreaWidth = Math.max(1, rect.width - paddingLeft - paddingRight);
+    const relX = Math.max(0, Math.min(chartAreaWidth, clickX - paddingLeft));
+    const targetLap = Math.max(1, Math.min(totalLaps, Math.round(1 + (relX / chartAreaWidth) * (totalLaps - 1))));
+    setCurrentLap(targetLap);
+    setIsPlaying(false);
+  };
 
-    return rows.map((row, idx, arr) => {
-      let gapText = "";
-      let intervalText = "";
-
-      if (row.isRetired) {
-        gapText = `DNF (Lap ${row.retireLap})`;
-        intervalText = "OUT";
-      } else if (row.pos === 1) {
-        gapText = "LEADER";
-        intervalText = "LEADER";
-      } else if (row.gapVal !== null && row.gapVal !== undefined) {
-        gapText = `+${row.gapVal.toFixed(3)}s`;
-        const prevRow = arr[idx - 1];
-        if (prevRow && !prevRow.isRetired && prevRow.gapVal !== null && prevRow.gapVal !== undefined) {
-          const diff = row.gapVal - prevRow.gapVal;
-          intervalText = `+${Math.max(0, diff).toFixed(3)}s`;
-        } else {
-          intervalText = gapText;
-        }
-      } else {
-        gapText = "DNF";
-        intervalText = "OUT";
-      }
-
-      return {
-        ...row,
-        displayPos: row.isRetired ? "DNF" : `P${row.pos ?? idx + 1}`,
-        gapText,
-        intervalText,
-      };
-    });
-  }, [race, currentLap]);
-
-  // Race control messages up to current lap
-  const rcMessages = useMemo(() => {
-    return race.raceControl.filter((m) => m.lap <= currentLap);
-  }, [race, currentLap]);
+  const raceTitle = bundle ? `${bundle.grand_prix} ${bundle.year}` : "Grand Prix Session";
 
   return (
     <div className="space-y-6">
-      {/* Demo banner */}
-      {DEMO_MODE && (
-        <div className="px-3 py-1.5 rounded text-xs font-mono bg-amber-500/10 border border-amber-500/30 text-amber-400 flex items-center justify-between">
-          <span>{DEMO_LABEL}</span>
-          <span className="text-[11px] uppercase tracking-wider font-semibold">Simulated Session</span>
-        </div>
-      )}
-
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-[var(--border)]">
-        <div>
-          <div className="flex items-center gap-2 mb-1">
-            <span className="text-[11px] font-mono uppercase text-[var(--accent)] font-semibold flex items-center gap-1.5">
-              <Radio className="w-3.5 h-3.5 animate-pulse text-[var(--accent)]" />
-              Telemetry Feed Replay
-            </span>
-            <span className="text-[var(--text-3)] text-xs">•</span>
-            <span className="px-2 py-0.5 text-[11px] font-mono font-bold text-[var(--text-2)] bg-[var(--raised)] border border-[var(--border)] rounded">
-              REPLAY
-            </span>
+      {/* Top Session Control Banner */}
+      <section className="p-5 border border-[var(--border)] rounded-lg bg-[var(--surface)]">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <span
+                className={`flex items-center gap-1.5 px-2.5 py-0.5 rounded text-[11px] font-mono font-bold uppercase tracking-wider ${
+                  isLive
+                    ? "bg-red-500/15 text-red-400 border border-red-500/30 animate-pulse"
+                    : "bg-blue-500/15 text-blue-400 border border-blue-500/30"
+                }`}
+              >
+                <Radio className="w-3 h-3" />
+                <span>{isLive ? "LIVE SESSION" : "REPLAY MODE"}</span>
+              </span>
+              <span className="text-[var(--text-3)] text-xs">•</span>
+              <span className="text-[12px] font-mono text-[var(--text-3)]">
+                {raceTitle}
+              </span>
+              {bundle?.circuit_name && (
+                <>
+                  <span className="text-[var(--text-3)] text-xs">•</span>
+                  <span className="text-[12px] font-mono text-[var(--text-2)]">{bundle.circuit_name}</span>
+                </>
+              )}
+            </div>
+            <h1 className="text-[24px] font-semibold text-[var(--text)] tracking-tight mt-1">
+              {isLive ? "OpenF1 Live Timing Feed" : `Session Replay: Lap ${currentLap} of ${totalLaps}`}
+            </h1>
           </div>
-          <h1 className="text-[28px] font-semibold text-[var(--text)] tracking-tight">
-            Live Telemetry Feed
-          </h1>
-          <p className="text-[13px] text-[var(--text-3)] mt-0.5">
-            Replay: {DEMO_RACE.name}, {DEMO_RACE.session} ({DEMO_RACE.circuit})
-          </p>
+
+          {/* Interactive Lap Scrubber Controls (in Replay Mode) */}
+          {!isLive && (
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setCurrentLap(1);
+                  setIsPlaying(false);
+                }}
+                className="p-2 border border-[var(--border)] rounded bg-[var(--raised)] text-[var(--text-2)] hover:text-[var(--text)] transition-colors"
+                title="Restart from Lap 1"
+              >
+                <SkipBack className="w-4 h-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsPlaying(!isPlaying)}
+                className="flex items-center gap-1.5 px-3 py-2 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white text-xs font-mono font-bold rounded transition-colors"
+              >
+                {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+                <span>{isPlaying ? "PAUSE" : "PLAY"}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setCurrentLap(totalLaps);
+                  setIsPlaying(false);
+                }}
+                className="p-2 border border-[var(--border)] rounded bg-[var(--raised)] text-[var(--text-2)] hover:text-[var(--text)] transition-colors"
+                title="Jump to Finish"
+              >
+                <SkipForward className="w-4 h-4" />
+              </button>
+            </div>
+          )}
         </div>
 
-        {/* Lap scrubber controls */}
-        <div className="flex flex-col sm:items-end gap-2">
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setCurrentLap((p) => Math.max(1, p - 1))}
-              disabled={currentLap <= 1}
-              className="p-1.5 text-[var(--text-2)] hover:text-[var(--text)] bg-[var(--raised)] border border-[var(--border)] rounded disabled:opacity-40"
-              title="Previous lap"
-            >
-              <SkipBack className="w-4 h-4" />
-            </button>
-            <button
-              type="button"
-              onClick={() => setIsPlaying(!isPlaying)}
-              className="px-3 py-1.5 flex items-center gap-1.5 text-xs font-mono font-bold bg-[var(--accent)] text-white rounded hover:opacity-90 transition-opacity"
-            >
-              {isPlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
-              {isPlaying ? "PAUSE" : "PLAY"}
-            </button>
-            <button
-              type="button"
-              onClick={() => setCurrentLap((p) => Math.min(DEMO_RACE.laps, p + 1))}
-              disabled={currentLap >= DEMO_RACE.laps}
-              className="p-1.5 text-[var(--text-2)] hover:text-[var(--text)] bg-[var(--raised)] border border-[var(--border)] rounded disabled:opacity-40"
-              title="Next lap"
-            >
-              <SkipForward className="w-4 h-4" />
-            </button>
-            <span className="text-sm font-mono font-bold px-3 py-1 bg-[var(--surface)] border border-[var(--border)] rounded text-[var(--accent)]">
-              Lap {currentLap} / {DEMO_RACE.laps}
-            </span>
-          </div>
-          <div className="w-full sm:w-64 flex items-center gap-2">
+        {/* Scrubber slider */}
+        {!isLive && (
+          <div className="mt-4 pt-3 border-t border-[var(--border)]">
+            <div className="flex justify-between items-center text-[11px] font-mono text-[var(--text-3)] mb-1">
+              <span>Lap 1</span>
+              <span className="font-bold text-[var(--accent)]">
+                Selected: Lap {currentLap} ({Math.round((currentLap / totalLaps) * 100)}%)
+              </span>
+              <span>Lap {totalLaps} (Finish)</span>
+            </div>
             <input
               type="range"
               min={1}
-              max={DEMO_RACE.laps}
+              max={totalLaps}
               value={currentLap}
-              onChange={(e) => setCurrentLap(Number(e.target.value))}
+              onChange={(e) => {
+                setCurrentLap(parseInt(e.target.value, 10));
+                setIsPlaying(false);
+              }}
               className="w-full accent-[var(--accent)] cursor-pointer"
-              aria-label="Lap scrubber"
             />
           </div>
-        </div>
-      </div>
-
-      {/* Weather Strip */}
-      <section className="p-4 border border-[var(--border)] rounded-lg bg-[var(--surface)]">
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="text-[12px] font-semibold text-[var(--text-3)] uppercase tracking-wider">
-            Trackside Meteorological Strip (Lap {currentWeather.lap})
-          </h2>
-          <span className="text-[11px] font-mono text-[var(--text-3)]">
-            {currentWeather.rain ? "Wet track conditions" : "Dry track surface"}
-          </span>
-        </div>
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
-          <Stat label="Air Temperature" value={`${currentWeather.airC}°C`} unit="Ambient" />
-          <Stat label="Track Temperature" value={`${currentWeather.trackC}°C`} unit="Surface" />
-          <Stat label="Relative Humidity" value={`${currentWeather.humidity}%`} unit="RH" />
-          <Stat label="Wind Velocity" value={`${currentWeather.windMs} m/s`} unit="Vector" />
-          <Stat label="Rainfall Probability" value={currentWeather.rain ? "100%" : "0%"} unit="Precip" />
-        </div>
+        )}
       </section>
 
-      {/* Live Stream Panels */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Leaderboard / Trace (2 cols) */}
-        <div className="lg:col-span-2 space-y-6">
+      {/* Environmental Strip (Honest real data, no fake placeholders) */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        <Stat
+          label="Track Air Temp"
+          value={weather?.air_temp || "N/A"}
+          delta={weather?.air_temp ? "Ambient Air" : "Telemetry Unrecorded"}
+          deltaType="neutral"
+        />
+        <Stat
+          label="Track Surface"
+          value={weather?.track_temp || "N/A"}
+          delta={weather?.track_temp ? "Asphalt Temp" : "Telemetry Unrecorded"}
+          deltaType="neutral"
+        />
+        <Stat
+          label="Humidity / Wind"
+          value={weather?.humidity ? `${weather.humidity} • ${weather.wind_speed || ""}` : "N/A"}
+          delta={weather?.rainfall ? "Rain Active" : "Track Condition"}
+          deltaType={weather?.rainfall ? "negative" : "neutral"}
+        />
+        <Stat
+          label="Session Status"
+          value={trackStatusDisplay.label}
+          delta={isLive ? "Live Session" : `Lap ${currentLap}`}
+          deltaType={trackStatus === "GREEN" ? "positive" : trackStatus === "RED" ? "negative" : "neutral"}
+        />
+      </div>
+
+      {loading && (
+        <div className="p-8 text-center text-sm font-mono text-[var(--text-3)] border border-[var(--border)] rounded-lg bg-[var(--surface)]">
+          Loading verified session telemetry bundle...
+        </div>
+      )}
+
+      {error && (
+        <div className="p-4 border border-red-500/30 rounded-lg bg-red-500/10 text-red-400 text-xs font-mono">
+          {error}
+        </div>
+      )}
+
+      {/* Timing Leaderboard */}
+      {!loading && !error && (
+        <section>
           <Panel
-            title={`Telemetry Leaderboard (Lap ${currentLap} of ${DEMO_RACE.laps})`}
-            subtitle="Real-time order, gaps, tyre compound and sector intervals"
+            title="Session Classification"
+            subtitle={`Verified driver intervals and tyre stint pace at Lap ${currentLap} of ${totalLaps}`}
           >
-            <div className="overflow-x-auto p-1">
-              <table className="w-full text-[12px]">
-                <thead className="border-b border-[var(--border)]">
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs font-mono">
+                <thead className="border-b border-[var(--border)] text-[var(--text-3)]">
                   <tr>
-                    <th className="py-2 px-3 text-left text-[var(--text-3)]">Pos</th>
-                    <th className="py-2 px-3 text-left text-[var(--text-3)]">Driver</th>
-                    <th className="py-2 px-3 text-left text-[var(--text-3)]">Tyre</th>
-                    <th className="py-2 px-3 text-right text-[var(--text-3)]">Gap</th>
-                    <th className="py-2 px-3 text-right text-[var(--text-3)]">Interval</th>
-                    <th className="py-2 px-3 text-right text-[var(--text-3)]">Last Lap</th>
-                    <th className="py-2 px-3 text-right text-[var(--text-3)]">S1 / S2 / S3</th>
-                    <th className="py-2 px-3 text-center text-[var(--text-3)]">Pits</th>
+                    <th className="py-2.5 px-3 text-left">Pos</th>
+                    <th className="py-2.5 px-3 text-left">Driver</th>
+                    <th className="py-2.5 px-3 text-left">Constructor</th>
+                    <th className="py-2.5 px-3 text-right">Gap to Leader</th>
+                    <th className="py-2.5 px-3 text-right">Interval</th>
+                    <th className="py-2.5 px-3 text-center">Tyre Compound</th>
+                    <th className="py-2.5 px-3 text-right">Tyre Age</th>
+                    <th className="py-2.5 px-3 text-right">Last Lap</th>
+                    <th className="py-2.5 px-3 text-center">Pit</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-[var(--border)] font-mono">
-                  {leaderboard.map((r) => (
-                    <tr
-                      key={r.driver.code}
-                      className={`hover:bg-[var(--raised)] transition-colors ${
-                        r.isRetired ? "opacity-60" : ""
-                      }`}
-                    >
-                      <td className="py-2 px-3 font-bold text-[var(--text)]">{r.displayPos}</td>
-                      <td className="py-2 px-3 font-sans">
-                        <div className="flex items-center gap-2">
-                          <span
-                            className="w-2 h-2 rounded-full shrink-0"
-                            style={{ backgroundColor: r.team.color }}
-                          />
-                          <span className="font-bold text-[var(--text)]">{r.driver.code}</span>
-                          <span className="text-[var(--text-3)] hidden md:inline text-[11px] truncate max-w-[100px]">
-                            {r.driver.name}
-                          </span>
-                        </div>
+                <tbody className="divide-y divide-[var(--border)]">
+                  {leaderboard.length === 0 ? (
+                    <tr>
+                      <td colSpan={9} className="py-6 text-center text-[var(--text-3)]">
+                        No telemetry timing recorded for Lap {currentLap}.
                       </td>
-                      <td className="py-2 px-3">
-                        <span
-                          className="px-1.5 py-0.5 rounded text-[10px] font-bold"
-                          style={{
-                            backgroundColor: `${COMPOUND_COLOR[r.compound]}22`,
-                            color: COMPOUND_COLOR[r.compound],
-                            border: `1px solid ${COMPOUND_COLOR[r.compound]}55`,
-                          }}
-                        >
-                          {COMPOUND_NAME[r.compound][0]} ({r.tyreAge}L)
-                        </span>
-                      </td>
-                      <td className="py-2 px-3 text-right text-[var(--accent)] font-semibold">
-                        {r.gapText}
-                      </td>
-                      <td className="py-2 px-3 text-right text-[var(--text-2)]">{r.intervalText}</td>
-                      <td className="py-2 px-3 text-right text-[var(--text)]">{r.lastLapTime}</td>
-                      <td className="py-2 px-3 text-right text-[var(--text-3)] text-[11px]">
-                        {r.s1} / {r.s2} / {r.s3}
-                      </td>
-                      <td className="py-2 px-3 text-center text-[var(--text-2)]">{r.pitCount}</td>
                     </tr>
-                  ))}
+                  ) : (
+                    leaderboard.map((row) => {
+                      const compBadge = getCompoundBadge(row.compound);
+                      return (
+                        <tr
+                          key={row.code}
+                          className="hover:bg-[var(--raised)]/50 transition-colors"
+                        >
+                          <td className="py-2 px-3 font-bold text-[var(--text)]">
+                            P{row.pos}
+                          </td>
+                          <td className="py-2 px-3 font-sans font-semibold text-[var(--text)]">
+                            <div className="flex items-center gap-2">
+                              <span
+                                className="w-1.5 h-4 rounded-full shrink-0"
+                                style={{ backgroundColor: row.team_color }}
+                              />
+                              <span className="font-mono text-xs font-bold px-1 rounded bg-[var(--raised)] text-[var(--text)]">
+                                {row.code}
+                              </span>
+                              <span className="truncate">{row.driver}</span>
+                            </div>
+                          </td>
+                          <td className="py-2 px-3 font-sans text-[var(--text-2)]">
+                            {row.team}
+                          </td>
+                          <td className="py-2 px-3 text-right text-[var(--accent)] font-semibold">
+                            {row.gap || (row.pos === 1 ? "LEADER" : "-")}
+                          </td>
+                          <td className="py-2 px-3 text-right text-[var(--text-2)]">
+                            {row.interval || "-"}
+                          </td>
+                          <td className="py-2 px-3 text-center">
+                            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold border ${compBadge.bg}`}>
+                              <span className="w-2 h-2 rounded-full bg-current" />
+                              {compBadge.full}
+                            </span>
+                          </td>
+                          <td className="py-2 px-3 text-right text-[var(--text-3)]">
+                            {row.tyre_life ? `${row.tyre_life} L` : "-"}
+                          </td>
+                          <td className="py-2 px-3 text-right text-[var(--text-2)] font-mono">
+                            {row.last_lap || "-"}
+                          </td>
+                          <td className="py-2 px-3 text-center">
+                            {row.is_pit ? (
+                              <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-500/20 text-amber-400 border border-amber-500/40">
+                                PIT
+                              </span>
+                            ) : (
+                              <span className="text-[var(--text-3)]">-</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
                 </tbody>
               </table>
             </div>
           </Panel>
-        </div>
+        </section>
+      )}
 
-        {/* Race Control Feed (1 col) */}
-        <div className="lg:col-span-1">
+      {/* 5.5 Lap-by-Lap Synchronized Chart Panel */}
+      {bundle && bundle.chart_data && (
+        <section>
           <Panel
-            title="Race Control Telemetry Feed"
-            subtitle={`Messages up to lap ${currentLap}`}
+            title="Synchronized Race Progression"
+            subtitle="Click or drag anywhere on the chart to scrub the session in real-time"
           >
-            <div className="space-y-3 p-1 max-h-[500px] overflow-y-auto">
-              {rcMessages.length === 0 ? (
-                <div className="p-4 text-center text-xs text-[var(--text-3)]">
-                  No race control messages recorded up to lap {currentLap}.
-                </div>
-              ) : (
-                rcMessages.map((ev, i) => (
-                  <div
-                    key={i}
-                    className="p-2.5 border border-[var(--border)] rounded bg-[var(--raised)] text-[12px] space-y-1"
-                  >
-                    <div className="flex items-center justify-between text-[10px] font-mono text-[var(--text-3)]">
-                      <span className="flex items-center gap-1">
-                        <Clock className="w-3 h-3" />
-                        {ev.time}
-                      </span>
-                      <span className="px-1.5 py-0.2 bg-[var(--surface)] border border-[var(--border)] rounded font-semibold text-[var(--text-2)]">
-                        Lap {ev.lap}
-                      </span>
-                    </div>
-                    <div className="flex items-start gap-2 pt-0.5">
-                      {ev.category === "SafetyCar" ? (
-                        <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-                      ) : (
-                        <Flag className="w-4 h-4 text-[var(--accent)] shrink-0 mt-0.5" />
-                      )}
-                      <p className="text-[var(--text)] font-sans text-[12px] leading-tight">
-                        {ev.message}
-                      </p>
-                    </div>
-                  </div>
-                ))
-              )}
+            <div className="flex items-center justify-between gap-4 mb-3 pb-2 border-b border-[var(--border)]">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setChartMetric("positions")}
+                  className={`px-3 py-1 rounded text-xs font-mono font-semibold border transition-colors ${
+                    chartMetric === "positions"
+                      ? "bg-[var(--accent)] text-white border-[var(--accent)]"
+                      : "bg-[var(--raised)] text-[var(--text-2)] border-[var(--border)] hover:text-[var(--text)]"
+                  }`}
+                >
+                  Position Progression
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setChartMetric("lap_times")}
+                  className={`px-3 py-1 rounded text-xs font-mono font-semibold border transition-colors ${
+                    chartMetric === "lap_times"
+                      ? "bg-[var(--accent)] text-white border-[var(--accent)]"
+                      : "bg-[var(--raised)] text-[var(--text-2)] border-[var(--border)] hover:text-[var(--text)]"
+                  }`}
+                >
+                  Lap Times (Pace)
+                </button>
+              </div>
+              <span className="text-[11px] font-mono text-[var(--text-3)]">
+                Active Cursor: Lap {currentLap}
+              </span>
+            </div>
+
+            {/* Interactive SVG Chart */}
+            <div className="relative w-full h-[280px]">
+              <svg
+                ref={chartSvgRef}
+                className="w-full h-full cursor-crosshair select-none"
+                onClick={handleChartClick}
+                aria-label="Synchronized session progression chart"
+              >
+                {/* Background grid */}
+                <rect x="45" y="15" width={Math.max(10, chartWidth - 90)} height="230" fill="transparent" />
+
+                {/* Vertical Cursor for Current Lap */}
+                {(() => {
+                  const paddingLeft = 45;
+                  const paddingRight = 45;
+                  const innerWidth = Math.max(1, chartWidth - paddingLeft - paddingRight);
+                  const cursorX = totalLaps > 1 ? paddingLeft + ((currentLap - 1) / (totalLaps - 1)) * innerWidth : paddingLeft;
+                  return (
+                    <g>
+                      <line
+                        x1={cursorX}
+                        y1="15"
+                        x2={cursorX}
+                        y2="245"
+                        stroke="var(--accent)"
+                        strokeWidth="2"
+                        strokeDasharray="4 2"
+                      />
+                      <rect
+                        x={cursorX - 25}
+                        y="2"
+                        width="50"
+                        height="14"
+                        rx="3"
+                        fill="var(--accent)"
+                      />
+                      <text
+                        x={cursorX}
+                        y="12"
+                        textAnchor="middle"
+                        fill="#FFFFFF"
+                        fontSize="9"
+                        fontFamily="monospace"
+                        fontWeight="bold"
+                      >
+                        L{currentLap}
+                      </text>
+                    </g>
+                  );
+                })()}
+
+                {/* Chart series */}
+                {(() => {
+                  const paddingLeft = 45;
+                  const paddingRight = 45;
+                  const paddingTop = 25;
+                  const chartHeight = 220;
+                  const innerWidth = Math.max(1, chartWidth - paddingLeft - paddingRight);
+
+                  // Extract top 10 driver codes to keep visualization readable
+                  const driverCodes = Object.keys(bundle.chart_data.positions).slice(0, 10);
+
+                  return driverCodes.map((code) => {
+                    const dInfo = bundle.drivers[code] || {};
+                    const color = dInfo.team_color || "#71717A";
+                    const dash = dInfo.dash || "";
+
+                    const points: string[] = [];
+
+                    if (chartMetric === "positions") {
+                      const posList = bundle.chart_data.positions[code] || [];
+                      posList.forEach((pos, idx) => {
+                        const lapNum = idx + 1;
+                        const x = totalLaps > 1 ? paddingLeft + ((lapNum - 1) / (totalLaps - 1)) * innerWidth : paddingLeft;
+                        // P1 at top, P20 at bottom
+                        const y = paddingTop + ((Math.max(1, Math.min(20, pos)) - 1) / 19) * chartHeight;
+                        points.push(`${x.toFixed(1)},${y.toFixed(1)}`);
+                      });
+                    } else {
+                      const ltList = bundle.chart_data.lap_times[code] || [];
+                      // Find min & max lap times among valid entries
+                      const validTimes = ltList.filter((t): t is number => typeof t === "number" && t > 50 && t < 150);
+                      const minT = validTimes.length > 0 ? Math.min(...validTimes) : 80;
+                      const maxT = validTimes.length > 0 ? Math.max(...validTimes) : 110;
+                      const rangeT = Math.max(1, maxT - minT);
+
+                      ltList.forEach((t, idx) => {
+                        if (typeof t === "number" && t > 0) {
+                          const lapNum = idx + 1;
+                          const x = totalLaps > 1 ? paddingLeft + ((lapNum - 1) / (totalLaps - 1)) * innerWidth : paddingLeft;
+                          const clampedT = Math.max(minT, Math.min(maxT, t));
+                          // Faster lap (lower seconds) at top
+                          const y = paddingTop + ((clampedT - minT) / rangeT) * chartHeight;
+                          points.push(`${x.toFixed(1)},${y.toFixed(1)}`);
+                        }
+                      });
+                    }
+
+                    if (points.length < 2) return null;
+
+                    return (
+                      <g key={code}>
+                        <polyline
+                          points={points.join(" ")}
+                          fill="none"
+                          stroke={color}
+                          strokeWidth="2"
+                          strokeDasharray={dash}
+                          opacity="0.85"
+                        />
+                      </g>
+                    );
+                  });
+                })()}
+
+                {/* Y Axis labels */}
+                {chartMetric === "positions" ? (
+                  <g fontSize="10" fontFamily="monospace" fill="var(--text-3)">
+                    <text x="10" y="32">P1</text>
+                    <text x="10" y="142">P10</text>
+                    <text x="10" y="245">P20</text>
+                  </g>
+                ) : (
+                  <g fontSize="10" fontFamily="monospace" fill="var(--text-3)">
+                    <text x="10" y="32">Fast</text>
+                    <text x="10" y="245">Slow</text>
+                  </g>
+                )}
+              </svg>
             </div>
           </Panel>
-        </div>
-      </div>
+        </section>
+      )}
     </div>
   );
 }

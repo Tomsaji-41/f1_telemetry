@@ -1,11 +1,12 @@
 "use client";
 
-import React, { useState, useEffect, Suspense } from "react";
+import React, { useState, useEffect, Suspense, useCallback, useRef } from "react";
 import { useSearchParams } from "next/navigation";
 import { Segmented } from "@/components/primitives/kit";
 import { ChartPanel } from "@/components/charts/ChartPanel";
 import { ChartState } from "@/components/charts/ChartState";
 import { PositionByLapChart } from "@/components/charts/PositionByLapChart";
+import { SlopeChart } from "@/components/charts/SlopeChart";
 import { GapEvolutionChart } from "@/components/charts/GapEvolutionChart";
 import { TyreStintGantt } from "@/components/charts/TyreStintGantt";
 import { DegradationChart } from "@/components/charts/DegradationChart";
@@ -16,7 +17,6 @@ import { ChampionshipProgressionChart } from "@/components/charts/ChampionshipPr
 import Plot from "@/components/charts/Plot";
 import en from "@/content/en.json";
 import { fetcher } from "@/lib/api";
-import { DEMO_MODE, DEMO_LABEL } from "@/demo/demoData";
 
 type AnalyticsTab =
   | "positions"
@@ -30,65 +30,158 @@ type AnalyticsTab =
 
 function AnalyticsStudio(): React.JSX.Element {
   const searchParams = useSearchParams();
-  const currentYear = new Date().getFullYear();
-  const year = parseInt(searchParams.get("year") || String(currentYear), 10);
-  const round = parseInt(searchParams.get("round") || "1", 10);
+  const yearParam = searchParams.get("year");
+  const roundParam = searchParams.get("round");
+  const year = yearParam ? parseInt(yearParam, 10) : undefined;
+  const round = roundParam ? parseInt(roundParam, 10) : undefined;
 
   const [activeTab, setActiveTab] = useState<AnalyticsTab>("positions");
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<any>(null);
 
+  // Secondary data for tabs with two charts
+  const [gridData, setGridData] = useState<any>(null);
+  const [gridLoading, setGridLoading] = useState(false);
+  const [gridError, setGridError] = useState<any>(null);
+
   // For tyres tab: driver selection for degradation
   const [degDriver, setDegDriver] = useState<string>("VER");
   const [degData, setDegData] = useState<any>(null);
+  const [degLoading, setDegLoading] = useState(false);
 
-  const fetchData = () => {
+  const pollTimerRef = useRef<any>(null);
+  const pollCountRef = useRef<number>(0);
+  const maxPolls = 22; // ~45-50s
+
+  const buildQuery = useCallback(
+    (extra?: Record<string, any>) => {
+      const q = new URLSearchParams();
+      if (year) q.set("year", String(year));
+      if (round) q.set("round", String(round));
+      if (extra) {
+        Object.entries(extra).forEach(([k, v]) => {
+          if (v !== undefined && v !== null) q.set(k, String(v));
+        });
+      }
+      const qs = q.toString();
+      return qs ? `?${qs}` : "";
+    },
+    [year, round]
+  );
+
+  const getPrimaryEndpoint = useCallback(() => {
+    switch (activeTab) {
+      case "positions":
+        return `/api/charts/position-by-lap${buildQuery()}`;
+      case "pace":
+        return `/api/charts/gap-evolution${buildQuery()}`;
+      case "tyres":
+        return `/api/charts/stints${buildQuery()}`;
+      case "pitstops":
+        return `/api/charts/pit-stops${buildQuery()}`;
+      case "sectors":
+        return `/api/charts/sector-heatmap${buildQuery()}`;
+      case "qualifying":
+        return `/api/charts/quali-gap${buildQuery()}`;
+      case "season":
+        return `/api/charts/championship-progression${buildQuery({ kind: "drivers" })}`;
+      case "weather":
+        return `/api/charts/weather${buildQuery()}`;
+      default:
+        return `/api/charts/position-by-lap${buildQuery()}`;
+    }
+  }, [activeTab, buildQuery]);
+
+  const fetchData = useCallback(() => {
+    if (pollTimerRef.current) {
+      clearTimeout(pollTimerRef.current);
+    }
+    pollCountRef.current = 0;
     setLoading(true);
     setError(null);
 
-    let endpoint = `/api/charts/position-by-lap?year=${year}&round=${round}`;
-    if (activeTab === "positions") {
-      endpoint = `/api/charts/position-by-lap?year=${year}&round=${round}`;
-    } else if (activeTab === "pace") {
-      endpoint = `/api/charts/gap-evolution?year=${year}&round=${round}`;
-    } else if (activeTab === "tyres") {
-      endpoint = `/api/charts/stints?year=${year}&round=${round}`;
-    } else if (activeTab === "pitstops") {
-      endpoint = `/api/charts/pit-stops?year=${year}&round=${round}`;
-    } else if (activeTab === "sectors") {
-      endpoint = `/api/charts/sector-heatmap?year=${year}&round=${round}`;
-    } else if (activeTab === "qualifying") {
-      endpoint = `/api/charts/quali-gap?year=${year}&round=${round}`;
-    } else if (activeTab === "season") {
-      endpoint = `/api/charts/championship-progression?year=${year}&kind=drivers`;
-    } else if (activeTab === "weather") {
-      endpoint = `/api/charts/weather?year=${year}&round=${round}`;
-    }
-
-    fetcher(endpoint)
-      .then((resData) => {
+    const poll = async () => {
+      try {
+        const endpoint = getPrimaryEndpoint();
+        const resData = await fetcher(endpoint);
         setData(resData);
-        setLoading(false);
-      })
-      .catch((err) => {
+
+        if (resData?.status === "preparing" && pollCountRef.current < maxPolls) {
+          pollCountRef.current += 1;
+          pollTimerRef.current = setTimeout(poll, 2200);
+        } else {
+          if (resData?.status === "preparing" && pollCountRef.current >= maxPolls) {
+            setData({
+              ...resData,
+              status: "source_error",
+              coverage_note: "Session data loading timed out after 45s. Please retry.",
+            });
+          }
+          setLoading(false);
+        }
+      } catch (err) {
         setError(err);
         setLoading(false);
-      });
-  };
+      }
+    };
 
+    poll();
+  }, [getPrimaryEndpoint]);
+
+  // Primary data fetch on tab/session change
   useEffect(() => {
     fetchData();
-  }, [activeTab, year, round]);
+    return () => {
+      if (pollTimerRef.current) {
+        clearTimeout(pollTimerRef.current);
+      }
+    };
+  }, [fetchData]);
+
+  // Fetch Grid vs Finish for positions tab
+  const fetchGridData = useCallback(() => {
+    if (activeTab !== "positions") return;
+    setGridLoading(true);
+    setGridError(null);
+
+    fetcher(`/api/charts/grid-vs-finish${buildQuery()}`)
+      .then((res) => {
+        setGridData(res);
+        setGridLoading(false);
+      })
+      .catch((err) => {
+        setGridError(err);
+        setGridLoading(false);
+      });
+  }, [activeTab, buildQuery]);
+
+  useEffect(() => {
+    if (activeTab === "positions") {
+      fetchGridData();
+    }
+  }, [activeTab, fetchGridData]);
 
   // Fetch degradation when on tyres tab
+  const fetchDegradation = useCallback(() => {
+    if (activeTab !== "tyres") return;
+    setDegLoading(true);
+    fetcher(`/api/charts/degradation${buildQuery({ driver: degDriver })}`)
+      .then((d) => {
+        setDegData(d);
+        setDegLoading(false);
+      })
+      .catch(() => {
+        setDegData(null);
+        setDegLoading(false);
+      });
+  }, [activeTab, buildQuery, degDriver]);
+
   useEffect(() => {
     if (activeTab === "tyres") {
-      fetcher(`/api/charts/degradation?year=${year}&round=${round}&driver=${degDriver}`)
-        .then((d) => setDegData(d))
-        .catch(() => setDegData(null));
+      fetchDegradation();
     }
-  }, [activeTab, year, round, degDriver]);
+  }, [activeTab, fetchDegradation]);
 
   const tabs = [
     { label: en.analytics.tabPositions, value: "positions" as AnalyticsTab },
@@ -103,14 +196,6 @@ function AnalyticsStudio(): React.JSX.Element {
 
   return (
     <div className="space-y-6">
-      {/* Demo badge banner */}
-      {DEMO_MODE && (
-        <div className="px-3 py-1.5 rounded text-xs font-mono bg-amber-500/10 border border-amber-500/30 text-amber-400 flex items-center justify-between">
-          <span>{DEMO_LABEL}</span>
-          <span className="text-[11px] uppercase tracking-wider font-semibold">Offline Analytics</span>
-        </div>
-      )}
-
       {/* Studio Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-[var(--border)]">
         <div>
@@ -135,7 +220,25 @@ function AnalyticsStudio(): React.JSX.Element {
       {/* Tab Panels with ChartState & Smooth Fade-in */}
       <div key={activeTab} className="space-y-6 tab-panel-enter reveal">
         {activeTab === "positions" && (
-          <PositionByLapChart data={data} loading={loading} />
+          <div className="space-y-6">
+            <PositionByLapChart data={data} loading={loading} />
+
+            <ChartPanel
+              title="Grid vs Finish (Position Changes)"
+              source={gridData?.source || "Jolpica"}
+              coverageNote={gridData?.coverage_note}
+              fetchedAt={gridData?.fetched_at}
+            >
+              <ChartState
+                data={gridData}
+                error={gridError}
+                isLoading={gridLoading}
+                retry={fetchGridData}
+              >
+                <SlopeChart d={gridData || { rows: [] }} />
+              </ChartState>
+            </ChartPanel>
+          </div>
         )}
 
         {activeTab === "pace" && (
@@ -165,12 +268,8 @@ function AnalyticsStudio(): React.JSX.Element {
                   />
                   <button
                     type="button"
-                    onClick={() => {
-                      fetch(`/api/charts/degradation?year=${year}&round=${round}&driver=${degDriver}`)
-                        .then((res) => res.json())
-                        .then((d) => setDegData(d));
-                    }}
-                    className="px-2.5 py-0.5 text-[11px] font-mono bg-[var(--accent)] text-white rounded"
+                    onClick={fetchDegradation}
+                    className="px-2.5 py-0.5 text-[11px] font-mono bg-[var(--accent)] text-white rounded hover:opacity-90 transition-opacity"
                   >
                     Load Driver
                   </button>
@@ -179,8 +278,8 @@ function AnalyticsStudio(): React.JSX.Element {
                 <ChartState
                   data={degData}
                   error={null}
-                  isLoading={loading && !degData}
-                  retry={fetchData}
+                  isLoading={degLoading && !degData}
+                  retry={fetchDegradation}
                 >
                   <DegradationChart d={degData || { stints: [] }} />
                 </ChartState>

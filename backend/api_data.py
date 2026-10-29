@@ -667,15 +667,65 @@ def pd_not_na(val):
 def get_live_status():
     """Check if an actual F1 session is live right now via OpenF1, otherwise report replay mode."""
     live = openf1_src.fetch_live_session()
-    is_live = live.get("status") == "ok" and live.get("positions") and len(live["positions"]) > 0
+    is_live = False
+    if live.get("status") == "ok":
+        date_start_str = live.get("date_start")
+        date_end_str = live.get("date_end")
+        if date_start_str:
+            try:
+                from datetime import datetime, timezone, timedelta
+                d_start = datetime.fromisoformat(date_start_str.replace("Z", "+00:00"))
+                now = datetime.now(timezone.utc)
+                if date_end_str:
+                    d_end = datetime.fromisoformat(date_end_str.replace("Z", "+00:00"))
+                else:
+                    d_end = d_start + timedelta(hours=3)
+                if d_start <= now <= d_end:
+                    is_live = True
+            except Exception as e:
+                logger.warning("Error parsing session dates: %s", e)
+                is_live = False
+
+    replay_info = None
+    if not is_live:
+        latest = jolpica.get_latest_completed_session()
+        replay_info = {
+            "year": latest["year"],
+            "round": latest["round"],
+            "session_name": "Race",
+            "grand_prix": latest.get("grand_prix", f"{latest['year']} Season"),
+            "circuit_short_name": latest.get("circuit_id", "")
+        }
 
     return std_envelope(
-        source="OpenF1",
+        source="OpenF1" if is_live else "Jolpica",
         status="ok",
         is_live=is_live,
         mode="live" if is_live else "replay",
-        session_info=live if is_live else None
+        session_info=live if is_live else replay_info
     )
+
+
+@router.get("/api/replay/bundle")
+def get_replay_bundle_query(year: Optional[int] = Query(None), round: Optional[int] = Query(None)):
+    """Fetch complete replay bundle for in-memory client scrubbing (Phase 5)."""
+    try:
+        from backend import replay
+    except ImportError:
+        import replay
+    data = replay.get_session_replay_bundle(year, round)
+    return std_envelope(**data)
+
+
+@router.get("/api/replay/{year}/{round}/bundle")
+def get_replay_bundle_path(year: int, round: int):
+    """Fetch complete replay bundle by path parameters (Phase 5)."""
+    try:
+        from backend import replay
+    except ImportError:
+        import replay
+    data = replay.get_session_replay_bundle(year, round)
+    return std_envelope(**data)
 
 
 @router.get("/api/live/stream")

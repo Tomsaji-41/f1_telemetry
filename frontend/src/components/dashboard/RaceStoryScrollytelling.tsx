@@ -2,43 +2,50 @@
 
 import React, { useState } from "react";
 import { PositionByLapChart } from "../charts/PositionByLapChart";
-import { Flag, ShieldAlert, Award, Clock, ArrowRight } from "lucide-react";
-import { getRace, driverByCode } from "@/demo/demoData";
+import { Flag, ShieldAlert, Award, Clock } from "lucide-react";
+
+interface TimelineEvent {
+  type: "control" | "pit";
+  lap: number;
+  time: string;
+  title: string;
+  description: string;
+  category?: string;
+  flag?: string;
+}
 
 interface RaceStoryProps {
   positionData: any;
-  raceResults?: any;
+  raceControl?: Array<{ lap: number; time?: string; message?: string; flag?: string; category?: string }>;
+  pitStops?: Array<{ driver?: string; stop?: number; lap?: number; duration?: string }>;
 }
 
 export function RaceStoryScrollytelling({
   positionData,
+  raceControl = [],
+  pitStops = [],
 }: RaceStoryProps) {
-  const race = getRace();
   const [filter, setFilter] = useState<"all" | "control" | "pits">("all");
 
-  // Build timeline strictly from raceControl and pit stop data
-  const controlEvents = race.raceControl.map((m) => ({
+  const controlEvents: TimelineEvent[] = (raceControl || []).map((m) => ({
     type: "control" as const,
-    lap: m.lap,
-    time: m.time,
+    lap: m.lap || 1,
+    time: m.time || "",
     title: m.flag ? `${m.flag} FLAG (Lap ${m.lap})` : `Race Control (Lap ${m.lap})`,
-    description: m.message,
-    category: m.category,
-    flag: m.flag,
+    description: m.message || "",
+    category: m.category || "Notice",
+    flag: m.flag || "",
   }));
 
-  const pitEvents = race.pits.map((p) => {
-    const driver = driverByCode(p.driver);
-    return {
-      type: "pit" as const,
-      lap: p.lap,
-      time: race.clock((p.lap - 1) * 91),
-      title: `Pit Stop: ${driver.name} (${p.driver})`,
-      description: `Stop ${p.stop} on Lap ${p.lap} — Stationary: ${p.stationaryS}s, Pit Lane: ${p.pitLaneS}s.`,
-      category: "Pit",
-      flag: "",
-    };
-  });
+  const pitEvents: TimelineEvent[] = (pitStops || []).map((p) => ({
+    type: "pit" as const,
+    lap: p.lap || 1,
+    time: "",
+    title: `Pit Stop: ${p.driver || "Car"}`,
+    description: `Stop ${p.stop || 1} on Lap ${p.lap || 1} — Duration: ${p.duration || "-"}`,
+    category: "Pit",
+    flag: "",
+  }));
 
   const allEvents = [...controlEvents, ...pitEvents].sort((a, b) => a.lap - b.lap);
   const displayedEvents = allEvents.filter((ev) => {
@@ -101,37 +108,43 @@ export function RaceStoryScrollytelling({
 
         {/* Scrollable Timeline */}
         <div className="space-y-2.5 max-h-[560px] overflow-y-auto pr-1">
-          {displayedEvents.map((ev, idx) => (
-            <div
-              key={`${ev.type}-${ev.lap}-${idx}`}
-              className="p-3.5 border border-[var(--border)] rounded-lg bg-[var(--surface)] hover:bg-[var(--raised)] transition-colors"
-              style={{ borderRadius: "var(--radius-m)" }}
-            >
-              <div className="flex items-center justify-between text-[11px] font-mono text-[var(--text-3)] mb-1">
-                <span className="flex items-center gap-1.5 font-bold text-[var(--text)]">
-                  {ev.type === "control" ? (
-                    ev.flag === "CHEQUERED" ? (
-                      <Award className="w-3.5 h-3.5 text-[var(--positive)]" />
-                    ) : ev.flag === "YELLOW" ? (
-                      <ShieldAlert className="w-3.5 h-3.5 text-amber-400" />
-                    ) : (
-                      <Flag className="w-3.5 h-3.5 text-[var(--accent)]" />
-                    )
-                  ) : (
-                    <Clock className="w-3.5 h-3.5 text-[var(--warning)]" />
-                  )}
-                  Lap {ev.lap}
-                </span>
-                <span>{ev.time}</span>
-              </div>
-              <h3 className="text-[13px] font-semibold text-[var(--text)]">
-                {ev.title}
-              </h3>
-              <p className="text-[12px] text-[var(--text-2)] mt-1 font-mono">
-                {ev.description}
-              </p>
+          {displayedEvents.length === 0 ? (
+            <div className="p-4 text-center text-xs font-mono text-[var(--text-3)] border border-[var(--border)] rounded-lg">
+              No incidents or pit events recorded for this session.
             </div>
-          ))}
+          ) : (
+            displayedEvents.map((ev, idx) => (
+              <div
+                key={`${ev.type}-${ev.lap}-${idx}`}
+                className="p-3.5 border border-[var(--border)] rounded-lg bg-[var(--surface)] hover:bg-[var(--raised)] transition-colors"
+                style={{ borderRadius: "var(--radius-m)" }}
+              >
+                <div className="flex items-center justify-between text-[11px] font-mono text-[var(--text-3)] mb-1">
+                  <span className="flex items-center gap-1.5 font-bold text-[var(--text)]">
+                    {ev.type === "control" ? (
+                      ev.flag === "CHEQUERED" ? (
+                        <Award className="w-3.5 h-3.5 text-[var(--positive)]" />
+                      ) : ev.flag === "YELLOW" ? (
+                        <ShieldAlert className="w-3.5 h-3.5 text-amber-400" />
+                      ) : (
+                        <Flag className="w-3.5 h-3.5 text-[var(--accent)]" />
+                      )
+                    ) : (
+                      <Clock className="w-3.5 h-3.5 text-[var(--warning)]" />
+                    )}
+                    Lap {ev.lap}
+                  </span>
+                  <span>{ev.time}</span>
+                </div>
+                <h3 className="text-[13px] font-semibold text-[var(--text)]">
+                  {ev.title}
+                </h3>
+                <p className="text-[12px] text-[var(--text-2)] mt-1 font-mono">
+                  {ev.description}
+                </p>
+              </div>
+            ))
+          )}
         </div>
       </div>
 

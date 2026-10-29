@@ -156,6 +156,7 @@ async def job_status(job_id: str):
 
 # ── FastF1 race charts ───────────────────────────────────────────────────────
 
+@router.get("/position-changes", include_in_schema=False)
 @router.get("/position-by-lap")
 async def r_position_by_lap(
     year: Optional[int] = Query(None),
@@ -180,6 +181,7 @@ async def r_gap_evolution(
     )
 
 
+@router.get("/lap-times", include_in_schema=False)
 @router.get("/lap-scatter")
 async def r_lap_scatter(
     year: Optional[int] = Query(None),
@@ -192,6 +194,8 @@ async def r_lap_scatter(
     )
 
 
+@router.get("/tyre-gantt", include_in_schema=False)
+@router.get("/stint-timeline", include_in_schema=False)
 @router.get("/stints")
 async def r_stints(
     year: Optional[int] = Query(None),
