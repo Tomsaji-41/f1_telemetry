@@ -61,6 +61,62 @@ def fetch_schedule(year: int) -> Dict[str, Any]:
         "coverage_note": "Schedules available from 1950 to present."
     }
 
+def get_latest_completed_session() -> Dict[str, Any]:
+    """
+    Runtime session resolver: queries Jolpica schedule and race results
+    to dynamically identify the most recent completed Grand Prix with classified results.
+    """
+    current_year = datetime.datetime.now().year
+    today = datetime.date.today()
+    
+    for yr in [current_year, current_year - 1, current_year - 2]:
+        sched_res = fetch_schedule(yr)
+        if sched_res.get("status") == "ok":
+            races = sched_res.get("schedule", [])
+            for r in reversed(races):
+                d_str = r.get("date", "")
+                try:
+                    r_date = datetime.date.fromisoformat(d_str)
+                    if r_date <= today:
+                        rnd = int(r.get("round", 1))
+                        res = fetch_race_results(yr, rnd)
+                        if res.get("status") == "ok" and res.get("results"):
+                            return {
+                                "year": yr,
+                                "round": rnd,
+                                "grand_prix": r.get("grand_prix") or res.get("grand_prix", ""),
+                                "date": r.get("date", ""),
+                                "circuit": r.get("circuit_name", "") or res.get("circuit", ""),
+                                "circuit_id": r.get("circuit_id", "")
+                            }
+                except Exception:
+                    continue
+
+    return {
+        "year": 2024,
+        "round": 24,
+        "grand_prix": "Abu Dhabi Grand Prix",
+        "date": "2024-12-08",
+        "circuit": "Yas Marina Circuit",
+        "circuit_id": "yas_marina"
+    }
+
+def get_available_sessions() -> Dict[str, Any]:
+    """
+    Returns available seasons and completed rounds for the UI session picker.
+    """
+    current_year = datetime.datetime.now().year
+    seasons = list(range(current_year, 1949, -1))
+    latest = get_latest_completed_session()
+    return {
+        "status": "ok",
+        "source": "Jolpica",
+        "current_year": current_year,
+        "latest_completed": latest,
+        "seasons": seasons,
+        "coverage_note": "FIA Formula 1 World Championship 1950-present"
+    }
+
 def fetch_race_results(year: int, round_num: int) -> Dict[str, Any]:
     url = f"{JOLPICA_BASE}/{year}/{round_num}/results.json?limit=100"
     ttl = _get_ttl_for_year(year)
@@ -162,7 +218,27 @@ def fetch_qualifying_results(year: int, round_num: int) -> Dict[str, Any]:
 def map_driver_standings(js: dict, total_rounds: int) -> dict:
     sl = js["MRData"]["StandingsTable"]["StandingsLists"][0]
     rows = []
+    seen_codes: Dict[str, str] = {}
     for s in sl.get("DriverStandings", []):
+        drv = s.get("Driver") or {}
+        d_id = drv.get("driverId") or ""
+        given = drv.get("givenName") or ""
+        family = drv.get("familyName") or ""
+        raw_code = drv.get("code")
+        if raw_code and len(raw_code) == 3:
+            code = raw_code.upper()
+        else:
+            # Fall back to first 3 letters of family name (Phase 2.1)
+            code = family[:3].upper() if len(family) >= 3 else (family + "X")[:3].upper()
+            logger.info("Driver %s missing official code; derived %s from family name", d_id, code)
+
+        # Unique code verification within season
+        if code in seen_codes and seen_codes[code] != d_id:
+            code = (given[:1] + family[:2]).upper()
+        seen_codes[code] = d_id
+
+        num = drv.get("permanentNumber") or s.get("number") or "-"
+
         cons = s.get("Constructors") or []
         pts = float(s["points"])
         pos_raw = s.get("position")
@@ -177,13 +253,24 @@ def map_driver_standings(js: dict, total_rounds: int) -> dict:
             pos_val = "n/a"
 
         team_name = cons[-1]["name"] if cons else "n/a"
+        c_id = cons[-1]["constructorId"] if cons else ""
         if not team_name or team_name == "-":
             team_name = "n/a"
 
         rows.append({
             "pos": pos_val,
             "position": pos_val,
-            "driver": f'{s["Driver"]["givenName"]} {s["Driver"]["familyName"]}',
+            "driverId": d_id,
+            "driver_id": d_id,
+            "code": code,
+            "number": num,
+            "driver": f'{given} {family}'.strip(),
+            "given_name": given,
+            "family_name": family,
+            "nationality": drv.get("nationality", ""),
+            "dob": drv.get("dateOfBirth", ""),
+            "constructorId": c_id,
+            "team_id": c_id,
             "team": team_name,
             "constructor": team_name,
             "points": int(pts) if pts == int(pts) else pts,
@@ -349,17 +436,27 @@ def fetch_pit_stops(year: int, round_num: int) -> Dict[str, Any]:
             "coverage_note": "Pit stop data exists from 2012 only."
         }
         
-    races = data["MRData"].get("RaceTable", {}).get("Races", [])
-    if not races or not races[0].get("PitStops"):
+    race_table = data["MRData"].get("RaceTable", {})
+    races = race_table.get("Races", [])
+    if not races:
+        if str(race_table.get("round")) == str(round_num) or data["MRData"].get("total") == "0":
+            return {
+                "status": "ok",
+                "year": year,
+                "round": round_num,
+                "pit_stops": [],
+                "source": "Jolpica",
+                "coverage_note": "Pit stop data exists from 2012 only."
+            }
         return {
             "status": "not_available",
-            "reason": f"No pit stops found for {year} round {round_num}",
+            "reason": f"No race found for {year} round {round_num}",
             "source": "Jolpica",
             "coverage_note": "Pit stop data exists from 2012 only."
         }
         
     stops = []
-    for s in races[0]["PitStops"]:
+    for s in races[0].get("PitStops", []):
         stops.append({
             "driver_id": s.get("driverId", ""),
             "stop": int(s.get("stop", 0)),
@@ -367,6 +464,15 @@ def fetch_pit_stops(year: int, round_num: int) -> Dict[str, Any]:
             "time": s.get("time", ""),
             "duration": s.get("duration", "")
         })
+        
+    return {
+        "status": "ok",
+        "year": year,
+        "round": round_num,
+        "pit_stops": stops,
+        "source": "Jolpica",
+        "coverage_note": "Pit stop data exists from 2012 only."
+    }
         
     return {
         "status": "ok",
