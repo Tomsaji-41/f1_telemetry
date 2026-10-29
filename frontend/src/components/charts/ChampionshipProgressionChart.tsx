@@ -90,29 +90,33 @@ export function ChampionshipProgressionChart({
       <div className="w-full overflow-x-auto">
         <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto select-none">
           {/* Y-axis Grid */}
-          {[0, maxPoints * 0.25, maxPoints * 0.5, maxPoints * 0.75, maxPoints].map((pts) => (
-            <g key={pts}>
-              <line
-                x1={margin.left}
-                y1={yScale(pts)}
-                x2={width - margin.right}
-                y2={yScale(pts)}
-                stroke="var(--border)"
-                strokeWidth={0.8}
-                strokeDasharray="2 2"
-              />
-              <text
-                x={margin.left - 8}
-                y={yScale(pts) + 3}
-                fontSize={10}
-                fill="var(--text-3)"
-                textAnchor="end"
-                fontFamily="var(--font-num)"
-              >
-                {Math.round(pts)}
-              </text>
-            </g>
-          ))}
+          {[0, maxPoints * 0.25, maxPoints * 0.5, maxPoints * 0.75, maxPoints].map((pts) => {
+            const y = yScale(pts);
+            if (!Number.isFinite(y)) return null;
+            return (
+              <g key={pts}>
+                <line
+                  x1={margin.left}
+                  y1={y}
+                  x2={width - margin.right}
+                  y2={y}
+                  stroke="var(--border)"
+                  strokeWidth={0.8}
+                  strokeDasharray="2 2"
+                />
+                <text
+                  x={margin.left - 8}
+                  y={y + 3}
+                  fontSize={10}
+                  fill="var(--text-3)"
+                  textAnchor="end"
+                  fontFamily="var(--font-num)"
+                >
+                  {Math.round(pts)}
+                </text>
+              </g>
+            );
+          })}
 
           {/* Points Bars for Top Competitors */}
           {rawSeries.map((s, idx) => {
@@ -121,6 +125,7 @@ export function ChampionshipProgressionChart({
             const pts = Number(s.points) || 0;
             const x = xScale(idx + 0.5);
             const y = yScale(pts);
+            if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
             const barHeight = Math.max(2, height - margin.bottom - y);
 
             return (

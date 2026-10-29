@@ -73,7 +73,13 @@ export function GridVsFinishChart({ data, d, loading = false }: GridVsFinishProp
   }, [data, d]);
 
   const validRows = useMemo(() => {
-    return rawRows.filter((r) => r.grid != null && r.finish != null);
+    return rawRows.filter(
+      (r) =>
+        r.grid != null &&
+        Number.isFinite(r.grid) &&
+        r.finish != null &&
+        Number.isFinite(r.finish)
+    );
   }, [rawRows]);
 
   const W = containerWidth;
@@ -168,35 +174,40 @@ export function GridVsFinishChart({ data, d, loading = false }: GridVsFinishProp
             </text>
 
             {/* Position Guide Lines */}
-            {Array.from({ length: maxPos }, (_, i) => i + 1).map((p) => (
-              <g key={p}>
-                <line
-                  x1={xLeft - 6}
-                  x2={xRight + 6}
-                  y1={ys(p)}
-                  y2={ys(p)}
-                  stroke="var(--border)"
-                  strokeWidth={0.5}
-                  strokeDasharray="2 3"
-                  opacity={0.5}
-                />
-                <text
-                  x={xLeft - 10}
-                  y={ys(p) + 3}
-                  fontSize={9}
-                  fill="var(--text-3)"
-                  textAnchor="end"
-                  className="font-num"
-                >
-                  P{p}
-                </text>
-              </g>
-            ))}
+            {Array.from({ length: maxPos }, (_, i) => i + 1).map((p) => {
+              const y = ys(p);
+              if (!Number.isFinite(y)) return null;
+              return (
+                <g key={p}>
+                  <line
+                    x1={xLeft - 6}
+                    x2={xRight + 6}
+                    y1={y}
+                    y2={y}
+                    stroke="var(--border)"
+                    strokeWidth={0.5}
+                    strokeDasharray="2 3"
+                    opacity={0.5}
+                  />
+                  <text
+                    x={xLeft - 10}
+                    y={y + 3}
+                    fontSize={9}
+                    fill="var(--text-3)"
+                    textAnchor="end"
+                    className="font-num"
+                  >
+                    P{p}
+                  </text>
+                </g>
+              );
+            })}
 
             {/* Slope Lines */}
             {validRows.map((r) => {
               const y1 = ys(r.grid!);
               const y2 = ys(r.finish!);
+              if (!Number.isFinite(y1) || !Number.isFinite(y2)) return null;
               const isRetirement = Boolean(r.is_dnf || r.is_dsq || r.badge === "DNF" || r.badge === "DSQ");
               const drvIdentity = getDriver(r.code);
               const teamColor = drvIdentity?.teamColor || getDriverColor(r.code) || "var(--accent)";

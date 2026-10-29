@@ -111,33 +111,38 @@ export function TyreStintGantt({ data, loading = false }: TyreStintGanttProps) {
       <div className="w-full overflow-x-auto">
         <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto select-none">
           {/* Laps Grid */}
-          {Array.from({ length: 6 }, (_, i) => Math.round((maxLap / 5) * i) || 1).map((lap) => (
-            <g key={lap}>
-              <line
-                x1={xScale(lap)}
-                y1={margin.top}
-                x2={xScale(lap)}
-                y2={height - margin.bottom}
-                stroke="var(--border)"
-                strokeWidth={0.8}
-                strokeDasharray="2 2"
-              />
-              <text
-                x={xScale(lap)}
-                y={height - margin.bottom + 16}
-                fontSize={10}
-                fill="var(--text-3)"
-                textAnchor="middle"
-                fontFamily="var(--font-num)"
-              >
-                L{lap}
-              </text>
-            </g>
-          ))}
+          {Array.from({ length: 6 }, (_, i) => Math.round((maxLap / 5) * i) || 1).map((lap) => {
+            const x = xScale(lap);
+            if (!Number.isFinite(x)) return null;
+            return (
+              <g key={lap}>
+                <line
+                  x1={x}
+                  y1={margin.top}
+                  x2={x}
+                  y2={height - margin.bottom}
+                  stroke="var(--border)"
+                  strokeWidth={0.8}
+                  strokeDasharray="2 2"
+                />
+                <text
+                  x={x}
+                  y={height - margin.bottom + 16}
+                  fontSize={10}
+                  fill="var(--text-3)"
+                  textAnchor="middle"
+                  fontFamily="var(--font-num)"
+                >
+                  L{lap}
+                </text>
+              </g>
+            );
+          })}
 
           {/* Stint Bars per Driver */}
           {drivers.map((drv, drvIdx) => {
             const y = margin.top + drvIdx * rowHeight;
+            if (!Number.isFinite(y)) return null;
             const stints = driverStints[drv] || [];
 
             return (
@@ -159,6 +164,7 @@ export function TyreStintGantt({ data, loading = false }: TyreStintGanttProps) {
                 {stints.map((st, sIdx) => {
                   const x1 = xScale(st.start_lap);
                   const x2 = xScale(st.end_lap);
+                  if (!Number.isFinite(x1) || !Number.isFinite(x2)) return null;
                   const barWidth = Math.max(4, x2 - x1);
                   const color = getCompoundColor(st.compound);
 

@@ -76,6 +76,7 @@ def position_by_lap(
             series=series,
             drivers=meta,
             driver_meta=meta,
+            coverage_note="Retired drivers or missing laps are represented with null positions.",
             axes={
                 "x": {"label": "Lap", "unit": ""},
                 "y": {"label": "Position", "unit": ""},

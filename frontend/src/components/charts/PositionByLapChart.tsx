@@ -2,6 +2,7 @@
 
 import React, { useState, useMemo } from "react";
 import { scaleLinear } from "d3-scale";
+import { line } from "d3-shape";
 import { ChartShell } from "./ChartShell";
 import { DriverChip } from "../primitives/kit";
 import { useInspector } from "../layouts/inspector-drawer";
@@ -10,7 +11,7 @@ import { useIdentity } from "@/lib/useIdentity";
 interface SeriesData {
   driver: string;
   x: number[]; // laps
-  y: number[]; // positions
+  y: Array<number | null | undefined>; // positions
 }
 
 interface PositionByLapProps {
@@ -18,12 +19,31 @@ interface PositionByLapProps {
     status?: string;
     source?: string;
     coverage_note?: string;
+    x?: number[];
     series?: SeriesData[];
     annotations?: { lap: number; type: string; text: string }[];
     driver_meta?: { code: string; name: string; team: string; colour: string }[];
   };
   loading?: boolean;
 }
+
+export const firstValidIndex = (vals: Array<number | null | undefined>): number => {
+  if (!vals || !Array.isArray(vals)) return -1;
+  for (let i = 0; i < vals.length; i++) {
+    const v = vals[i];
+    if (typeof v === "number" && Number.isFinite(v)) return i;
+  }
+  return -1;
+};
+
+export const lastValidIndex = (vals: Array<number | null | undefined>): number => {
+  if (!vals || !Array.isArray(vals)) return -1;
+  for (let i = vals.length - 1; i >= 0; i--) {
+    const v = vals[i];
+    if (typeof v === "number" && Number.isFinite(v)) return i;
+  }
+  return -1;
+};
 
 export function PositionByLapChart({ data, loading = false }: PositionByLapProps) {
   const { inspectItem } = useInspector();
@@ -57,7 +77,7 @@ export function PositionByLapChart({ data, loading = false }: PositionByLapProps
     series.forEach((s) => {
       const laps = s.x || rootX;
       laps.forEach((lap: number) => {
-        if (lap > m) m = lap;
+        if (typeof lap === "number" && Number.isFinite(lap) && lap > m) m = lap;
       });
     });
     return m;
@@ -74,6 +94,20 @@ export function PositionByLapChart({ data, loading = false }: PositionByLapProps
       .domain([1, 20])
       .range([margin.top, height - margin.bottom]);
   }, [height]);
+
+  // D3 line generator with strict .defined() check for finite positions & laps
+  const lineGenerator = useMemo(() => {
+    return line<{ lap: number; pos: number | null | undefined }>()
+      .defined(
+        (d) =>
+          typeof d.pos === "number" &&
+          Number.isFinite(d.pos) &&
+          typeof d.lap === "number" &&
+          Number.isFinite(d.lap)
+      )
+      .x((d) => xScale(d.lap))
+      .y((d) => yScale(d.pos as number));
+  }, [xScale, yScale]);
 
   // CSV generation
   const csvData = useMemo(() => {
@@ -99,7 +133,7 @@ export function PositionByLapChart({ data, loading = false }: PositionByLapProps
       const laps = s.x || rootX;
       const yVals = s.y || [];
       laps.forEach((lap: number, i: number) => {
-        rows.push([code, lap, `P${yVals[i] ?? "-"}`]);
+        rows.push([code, lap, yVals[i] != null ? `P${yVals[i]}` : "DNF"]);
       });
     });
     return rows;
@@ -147,45 +181,53 @@ export function PositionByLapChart({ data, loading = false }: PositionByLapProps
         <div className="w-full overflow-x-auto">
           <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto select-none">
             {/* Grid Lines */}
-            {[1, 5, 10, 15, 20].map((pos) => (
-              <g key={pos}>
-                <line
-                  x1={margin.left}
-                  y1={yScale(pos)}
-                  x2={width - margin.right}
-                  y2={yScale(pos)}
-                  stroke="var(--border)"
-                  strokeWidth={0.8}
-                  strokeDasharray="2 2"
-                />
-                <text
-                  x={margin.left - 8}
-                  y={yScale(pos) + 3}
-                  fontSize={10}
-                  fill="var(--text-3)"
-                  textAnchor="end"
-                  fontFamily="var(--font-num)"
-                >
-                  P{pos}
-                </text>
-              </g>
-            ))}
+            {[1, 5, 10, 15, 20].map((pos) => {
+              const y = yScale(pos);
+              if (!Number.isFinite(y)) return null;
+              return (
+                <g key={pos}>
+                  <line
+                    x1={margin.left}
+                    y1={y}
+                    x2={width - margin.right}
+                    y2={y}
+                    stroke="var(--border)"
+                    strokeWidth={0.8}
+                    strokeDasharray="2 2"
+                  />
+                  <text
+                    x={margin.left - 8}
+                    y={y + 3}
+                    fontSize={10}
+                    fill="var(--text-3)"
+                    textAnchor="end"
+                    fontFamily="var(--font-num)"
+                  >
+                    P{pos}
+                  </text>
+                </g>
+              );
+            })}
 
             {/* X-axis Laps */}
-            {Array.from({ length: 6 }, (_, i) => Math.round((maxLap / 5) * i) || 1).map((lap) => (
-              <g key={lap}>
-                <text
-                  x={xScale(lap)}
-                  y={height - margin.bottom + 18}
-                  fontSize={10}
-                  fill="var(--text-3)"
-                  textAnchor="middle"
-                  fontFamily="var(--font-num)"
-                >
-                  L{lap}
-                </text>
-              </g>
-            ))}
+            {Array.from({ length: 6 }, (_, i) => Math.round((maxLap / 5) * i) || 1).map((lap) => {
+              const x = xScale(lap);
+              if (!Number.isFinite(x)) return null;
+              return (
+                <g key={lap}>
+                  <text
+                    x={x}
+                    y={height - margin.bottom + 18}
+                    fontSize={10}
+                    fill="var(--text-3)"
+                    textAnchor="middle"
+                    fontFamily="var(--font-num)"
+                  >
+                    L{lap}
+                  </text>
+                </g>
+              );
+            })}
 
             {/* Series Lines with draw-on animation */}
             {series.map((s) => {
@@ -194,65 +236,89 @@ export function PositionByLapChart({ data, loading = false }: PositionByLapProps
               const rootX = (data as any)?.x || [];
               const laps = s.x || rootX;
               const yVals = s.y || [];
-              const points = laps
-                .map((lap: number, i: number) => `${xScale(lap)},${yScale(yVals[i])}`)
-                .join(" ");
+
               const drvMeta = getDriver(code);
               const color = drvMeta?.teamColor || getDriverColour(code);
               const strokeDash = drvMeta?.strokeDash || undefined;
 
+              // Generate path using D3 line with .defined() so retired drivers stop cleanly
+              const pointsData = laps.map((lap: number, i: number) => ({
+                lap,
+                pos: yVals[i],
+              }));
+              const pathData = lineGenerator(pointsData) || "";
+
+              const fi = firstValidIndex(yVals);
+              const li = lastValidIndex(yVals);
+
               return (
                 <g key={code} className="cursor-pointer group">
-                  <polyline
-                    points={points}
-                    fill="none"
-                    stroke={color}
-                    strokeWidth={1.8}
-                    strokeDasharray={strokeDash}
-                    strokeLinejoin="round"
-                    strokeLinecap="round"
-                    className="transition-all hover:stroke-[3px]"
-                    onClick={() => {
-                      inspectItem({
-                        type: "driver",
-                        title: code,
-                        subtitle: "Lap Position History",
-                        details: {
-                          "Start Position": `P${yVals[0] || "-"}`,
-                          "Finish Position": `P${yVals[yVals.length - 1] || "-"}`,
-                          "Laps Charted": laps.length,
-                        },
-                        queryContext: `Analyze position progression for ${code}`,
-                      });
-                    }}
-                  />
+                  {pathData ? (
+                    <path
+                      d={pathData}
+                      fill="none"
+                      stroke={color}
+                      strokeWidth={1.8}
+                      strokeDasharray={strokeDash}
+                      strokeLinejoin="round"
+                      strokeLinecap="round"
+                      className="transition-all hover:stroke-[3px]"
+                      onClick={() => {
+                        inspectItem({
+                          type: "driver",
+                          title: code,
+                          subtitle: "Lap Position History",
+                          details: {
+                            "Start Position": fi >= 0 && yVals[fi] != null ? `P${yVals[fi]}` : "-",
+                            "Finish Position": li >= 0 && yVals[li] != null ? `P${yVals[li]}` : "DNF",
+                            "Laps Charted": laps.length,
+                          },
+                          queryContext: `Analyze position progression for ${code}`,
+                        });
+                      }}
+                    />
+                  ) : null}
+
                   {/* Start of series label (left end) */}
-                  {laps.length > 0 && (
-                    <text
-                      x={xScale(laps[0]) - 6}
-                      y={yScale(yVals[0]) + 3}
-                      fontSize={9}
-                      fontFamily="var(--font-num)"
-                      fill="var(--text-3)"
-                      textAnchor="end"
-                      className="group-hover:fill-[var(--text)] font-semibold"
-                    >
-                      {code}
-                    </text>
-                  )}
+                  {(() => {
+                    if (fi < 0) return null;
+                    const x = xScale(laps[fi]);
+                    const y = yScale(yVals[fi] as number);
+                    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+                    return (
+                      <text
+                        x={x - 6}
+                        y={y + 3}
+                        fontSize={9}
+                        fontFamily="var(--font-num)"
+                        fill="var(--text-3)"
+                        textAnchor="end"
+                        className="group-hover:fill-[var(--text)] font-semibold"
+                      >
+                        {code}
+                      </text>
+                    );
+                  })()}
+
                   {/* End of series label (right end) */}
-                  {laps.length > 0 && (
-                    <text
-                      x={xScale(laps[laps.length - 1]) + 6}
-                      y={yScale(yVals[yVals.length - 1]) + 3}
-                      fontSize={10}
-                      fontFamily="var(--font-num)"
-                      fill={color}
-                      fontWeight="bold"
-                    >
-                      {code}
-                    </text>
-                  )}
+                  {(() => {
+                    if (li < 0) return null; // driver has no valid positions: skip label
+                    const x = xScale(laps[li]);
+                    const y = yScale(yVals[li] as number);
+                    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+                    return (
+                      <text
+                        x={x + 6}
+                        y={y + 3}
+                        fontSize={10}
+                        fontFamily="var(--font-num)"
+                        fill={color}
+                        fontWeight="bold"
+                      >
+                        {code}
+                      </text>
+                    );
+                  })()}
                 </g>
               );
             })}
