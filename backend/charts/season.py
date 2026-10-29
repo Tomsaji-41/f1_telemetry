@@ -237,33 +237,57 @@ def quali_gap(year: int, rnd: int) -> Dict[str, Any]:
 def championship_progression(
     year: int, kind: str = "drivers", top: int = 10
 ) -> Dict[str, Any]:
+    from concurrent.futures import ThreadPoolExecutor
+
     try:
         rounds = [r for r in _schedule_raw(year) if r["status"] == "completed"]
         if not rounds:
-            return envelope("Jolpica", "empty", f"No completed rounds for {year}.")
+            return envelope("Jolpica", "not_available", f"No completed rounds for {year}.")
 
         table: Dict[str, Dict[int, float]] = {}
-        for r in rounds:
-            rnd = int(r["round"])
-            for s in _standings_raw(year, kind, after_round=rnd):
-                if kind == "drivers":
-                    key = s["Driver"].get("code") or ""
-                else:
-                    key = s["Constructor"].get("constructorId") or ""
-                if not key:
-                    continue
-                table.setdefault(key, {})[rnd] = float(s.get("points", 0))
+
+        # Fetch standings concurrently across rounds
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            future_to_rnd = {
+                executor.submit(_standings_raw, year, kind, int(r["round"])): int(r["round"])
+                for r in rounds
+            }
+            for fut in future_to_rnd:
+                rnd = future_to_rnd[fut]
+                try:
+                    standings_rows = fut.result(timeout=5.0)
+                    for s in standings_rows:
+                        if kind == "drivers":
+                            key = s["Driver"].get("code") or ""
+                        else:
+                            key = s["Constructor"].get("constructorId") or ""
+                        if not key:
+                            continue
+                        table.setdefault(key, {})[rnd] = float(s.get("points", 0))
+                except Exception as e:
+                    logger.warning("Error fetching standings for round %d: %s", rnd, e)
 
         x = [int(r["round"]) for r in rounds]
         if not x:
-            return envelope("Jolpica", "empty", "No round data.")
+            return envelope("Jolpica", "not_available", "No round data.")
 
         last_rnd = x[-1]
         final = sorted(table, key=lambda k: -table[k].get(last_rnd, 0))[:top]
-        series = [{"id": k, "y": [table[k].get(n) for n in x]} for k in final]
+        series = [
+            {
+                "id": k,
+                "code": k,
+                "name": k,
+                "points": float(table[k].get(last_rnd, 0) or 0),
+                "position": idx + 1,
+                "y": [table[k].get(n) for n in x]
+            }
+            for idx, k in enumerate(final)
+        ]
 
         return envelope(
             "Jolpica",
+            "ok",
             x=x,
             series=series,
             rounds=[r["race_name"] for r in rounds],
@@ -273,7 +297,7 @@ def championship_progression(
             },
         )
     except Exception as exc:
-        return envelope("Jolpica", "empty", f"championship_progression error: {exc}")
+        return envelope("Jolpica", "error", f"championship_progression error: {exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -281,23 +305,35 @@ def championship_progression(
 # ---------------------------------------------------------------------------
 
 def finish_heatmap(year: int) -> Dict[str, Any]:
+    from concurrent.futures import ThreadPoolExecutor
+
     try:
         schedule = _schedule_raw(year)
+        completed_rounds = [r for r in schedule if r["status"] == "completed"]
         rows: Dict[str, Dict[int, Optional[int]]] = {}
-        for r in schedule:
-            if r["status"] != "completed":
-                continue
-            rnd = int(r["round"])
-            for d in _race_results_raw(year, rnd):
-                code = d.get("code") or d.get("driver_id", "")
+
+        # Fetch race results concurrently across completed rounds
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            future_to_rnd = {
+                executor.submit(_race_results_raw, year, int(r["round"])): int(r["round"])
+                for r in completed_rounds
+            }
+            for fut in future_to_rnd:
+                rnd = future_to_rnd[fut]
                 try:
-                    pos_val = int(d["position"])
-                except (ValueError, TypeError, KeyError):
-                    pos_val = None
-                rows.setdefault(code, {})[rnd] = pos_val
+                    res_list = fut.result(timeout=5.0)
+                    for d in res_list:
+                        code = d.get("code") or d.get("driver_id", "")
+                        try:
+                            pos_val = int(d["position"])
+                        except (ValueError, TypeError, KeyError):
+                            pos_val = None
+                        rows.setdefault(code, {})[rnd] = pos_val
+                except Exception as e:
+                    logger.warning("Error fetching results for round %d: %s", rnd, e)
 
         if not rows:
-            return envelope("Jolpica", "empty", f"No finish data for {year}.", rows={}, drivers=[])
-        return envelope("Jolpica", rows=rows, drivers=list(rows.keys()))
+            return envelope("Jolpica", "not_available", f"No finish data for {year}.", rows={}, drivers=[])
+        return envelope("Jolpica", "ok", rows=rows, drivers=list(rows.keys()))
     except Exception as exc:
-        return envelope("Jolpica", "empty", f"finish_heatmap error: {exc}", rows={}, drivers=[])
+        return envelope("Jolpica", "error", f"finish_heatmap error: {exc}", rows={}, drivers=[])

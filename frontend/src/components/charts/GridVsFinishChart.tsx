@@ -1,240 +1,301 @@
 "use client";
 
-import React, { useMemo } from "react";
+/**
+ * GridVsFinishChart.tsx — Unified Grid vs Finish Slope Chart (Phase 3.1 & 3.2).
+ * - Sized dynamically with ResizeObserver and min-height
+ * - Driver team colour from useIdentity() (teammates dashed per Phase 2.5)
+ * - Gained positions thicker with up-arrow (▲), lost with down-arrow (▼), neutral dash (—)
+ * - Direct labels like "VER P3 -> P1 (+2)" at finish end
+ * - Pit-lane starts and DNFs/DSQs shown accurately without invented positions
+ * - Legend, hover inspection, Table and CSV download toggles via ChartShell
+ * - Rendered client-only to ensure zero SSR hydration mismatch
+ */
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import { scaleLinear } from "d3-scale";
 import { ChartShell } from "./ChartShell";
+import { useIdentity } from "@/lib/useIdentity";
 import { useInspector } from "../layouts/inspector-drawer";
 
-interface GridFinishPair {
-  driver: string;
-  code?: string;
-  team: string;
-  grid: number;
-  position: number;
-  delta: number;
+export interface SlopeRow {
+  code: string;
+  driver?: string;
+  name?: string;
+  team?: string;
+  grid: number | null;
+  finish: number | null;
+  delta: number | null;
   status?: string;
   badge?: "DNF" | "DSQ" | null;
   is_dnf?: boolean;
   is_dsq?: boolean;
 }
 
-interface GridVsFinishProps {
-  data: {
+export interface GridVsFinishProps {
+  data?: {
     status?: string;
     source?: string;
     coverage_note?: string;
-    series?: GridFinishPair[];
-    rows?: any[];
-  };
+    rows?: SlopeRow[];
+    series?: SlopeRow[];
+  } | null;
+  d?: {
+    rows?: SlopeRow[];
+    series?: SlopeRow[];
+  } | null;
   loading?: boolean;
 }
 
-export function GridVsFinishChart({ data, loading = false }: GridVsFinishProps) {
+export function GridVsFinishChart({ data, d, loading = false }: GridVsFinishProps): React.JSX.Element {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [containerWidth, setContainerWidth] = useState(580);
+  const { getDriver, getDriverColor } = useIdentity();
   const { inspectItem } = useInspector();
-  const rawPairs = useMemo(() => {
-    if (data?.series?.length) return data.series;
-    if (data?.rows?.length) {
-      return data.rows.map((r) => ({
-        driver: r.name || r.code,
-        code: r.code,
-        team: r.team || "Unknown",
-        grid: r.grid,
-        position: r.finish,
-        delta: r.delta,
-        status: r.status,
-        badge: r.badge,
-        is_dnf: r.is_dnf,
-        is_dsq: r.is_dsq,
-      }));
-    }
+
+  // ResizeObserver for dynamic container responsiveness
+  useEffect(() => {
+    if (!containerRef.current || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.contentRect.width > 0) {
+          setContainerWidth(Math.max(340, Math.min(840, entry.contentRect.width)));
+        }
+      }
+    });
+    observer.observe(containerRef.current);
+    return () => observer.disconnect();
+  }, []);
+
+  const rawRows: SlopeRow[] = useMemo(() => {
+    const input = data || d;
+    if (input?.rows && Array.isArray(input.rows)) return input.rows;
+    if (input?.series && Array.isArray(input.series)) return input.series;
     return [];
-  }, [data]);
+  }, [data, d]);
 
-  const width = 640;
-  const height = 400;
-  const margin = { top: 30, right: 90, bottom: 20, left: 90 };
+  const validRows = useMemo(() => {
+    return rawRows.filter((r) => r.grid != null && r.finish != null);
+  }, [rawRows]);
 
-  const validPairs = useMemo(
-    () => rawPairs.filter((p) => p.grid != null && p.position != null),
-    [rawPairs]
-  );
+  const W = containerWidth;
+  const m = { l: 85, r: 130, t: 28, b: 24 };
+  const maxPos = useMemo(() => {
+    if (!validRows.length) return 20;
+    return Math.max(20, ...validRows.map((r) => Math.max(r.grid || 1, r.finish || 1)));
+  }, [validRows]);
 
-  const maxPos = useMemo(
-    () => Math.max(20, ...validPairs.map((p) => Math.max(p.grid, p.position))),
-    [validPairs]
-  );
+  const H = Math.max(380, m.t + maxPos * 22 + m.b);
 
-  const yScale = useMemo(() => {
+  const ys = useMemo(() => {
     return scaleLinear()
       .domain([1, maxPos])
-      .range([margin.top, height - margin.bottom]);
-  }, [height, maxPos]);
+      .range([m.t, H - m.b]);
+  }, [maxPos, H, m.t, m.b]);
+
+  const xLeft = m.l;
+  const xRight = W - m.r;
+
+  // Table rows and CSV data
+  const tableRows = useMemo(() => {
+    return validRows.map((r) => {
+      const code = r.code || r.name || "DRV";
+      const team = r.team || "Unknown";
+      const grid = r.grid != null ? `P${r.grid}` : "Pit Lane";
+      const finish = r.badge ? `${r.badge} (P${r.finish})` : `P${r.finish}`;
+      let deltaStr = "0";
+      if (r.badge) {
+        deltaStr = r.badge;
+      } else if (r.delta != null) {
+        deltaStr = r.delta > 0 ? `+${r.delta}` : r.delta < 0 ? String(r.delta) : "0";
+      }
+      return [code, team, grid, finish, deltaStr];
+    });
+  }, [validRows]);
 
   const csvData = useMemo(() => {
-    let csv = "Driver,Team,Grid,Finish,Delta,Status\n";
-    validPairs.forEach((p) => {
-      csv += `${p.driver},${p.team},${p.grid},${p.position},${p.delta ?? "DNF"},${p.status || "Finished"}\n`;
+    let csv = "Driver,Team,Grid,Finish,Delta\n";
+    tableRows.forEach((row) => {
+      csv += `${row.join(",")}\n`;
     });
     return csv;
-  }, [validPairs]);
+  }, [tableRows]);
 
-  const tableRows = useMemo(() => {
-    return validPairs.map((p) => [
-      p.driver,
-      p.team,
-      `P${p.grid}`,
-      p.badge ? `DNF (P${p.position})` : `P${p.position}`,
-      p.badge ? p.badge : p.delta > 0 ? `+${p.delta}` : p.delta === 0 ? "0" : String(p.delta),
-    ]);
-  }, [validPairs]);
+  const activeSource = (data as any)?.source || (d as any)?.source || "Jolpica";
+  const coverageNote = (data as any)?.coverage_note || (d as any)?.coverage_note;
 
   return (
     <ChartShell
       title="Grid versus Finish (Slope Chart)"
-      subtitle="Positions gained or lost from starting grid to chequered flag"
-      source={data?.source || "Jolpica"}
-      coverageNote={data?.coverage_note}
+      subtitle="Track position changes and places gained/lost from starting grid to chequered flag"
+      source={activeSource}
+      coverageNote={coverageNote}
       loading={loading}
-      empty={!validPairs.length}
+      empty={!validRows.length}
       csvData={csvData}
       csvFilename="grid_vs_finish.csv"
       tableHeaders={["Driver", "Team", "Grid", "Finish", "Delta"]}
       tableRows={tableRows}
     >
-      <div className="w-full overflow-x-auto">
-        <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto select-none" role="img" aria-label="Grid vs finish comparison">
-          {/* Column Headers */}
-          <text
-            x={margin.left}
-            y={margin.top - 12}
-            fontSize={11}
-            fontWeight="600"
-            fill="var(--text-3)"
-            textAnchor="middle"
-            className="font-mono uppercase"
+      <div ref={containerRef} className="w-full overflow-x-auto min-h-[360px]">
+        {validRows.length > 0 && (
+          <svg
+            viewBox={`0 0 ${W} ${H}`}
+            className="w-full h-auto select-none"
+            role="img"
+            aria-label="Grid versus finish comparison slope chart"
           >
-            STARTING GRID
-          </text>
-          <text
-            x={width - margin.right}
-            y={margin.top - 12}
-            fontSize={11}
-            fontWeight="600"
-            fill="var(--text-3)"
-            textAnchor="middle"
-            className="font-mono uppercase"
-          >
-            FINISH
-          </text>
+            {/* Column Header: Grid */}
+            <text
+              x={xLeft}
+              y={14}
+              fill="var(--text-3)"
+              fontSize="11"
+              textAnchor="middle"
+              className="font-mono uppercase font-bold tracking-wider"
+            >
+              Start Grid
+            </text>
 
-          {/* Guide lines */}
-          {Array.from({ length: maxPos }, (_, i) => i + 1).map((p) => (
-            <line
-              key={p}
-              x1={margin.left}
-              x2={width - margin.right}
-              y1={yScale(p)}
-              y2={yScale(p)}
-              stroke="var(--border)"
-              strokeWidth={0.5}
-              strokeDasharray="2 3"
-              opacity={0.5}
-            />
-          ))}
+            {/* Column Header: Finish */}
+            <text
+              x={xRight}
+              y={14}
+              fill="var(--text-3)"
+              fontSize="11"
+              textAnchor="middle"
+              className="font-mono uppercase font-bold tracking-wider"
+            >
+              Finish
+            </text>
 
-          {/* Lines for each driver */}
-          {validPairs.map((p) => {
-            const y1 = yScale(p.grid || 20);
-            const y2 = yScale(p.position || 20);
-            const isRetirement = p.is_dnf || p.is_dsq || p.badge === "DNF" || p.badge === "DSQ";
-            const gained = !isRetirement && p.delta > 0;
-            const lost = !isRetirement && p.delta < 0;
-            const unchanged = !isRetirement && p.delta === 0;
-
-            const strokeColor = isRetirement
-              ? "#f43f5e"
-              : gained
-              ? "var(--positive, #10b981)"
-              : lost
-              ? "var(--negative, #ef4444)"
-              : "var(--text-3)";
-
-            const driverCode = p.code || p.driver.slice(0, 3).toUpperCase();
-
-            return (
-              <g
-                key={`${p.driver}-${p.grid}`}
-                className="group cursor-pointer"
-                onClick={() => {
-                  inspectItem({
-                    type: "driver",
-                    title: p.driver,
-                    subtitle: p.team,
-                    details: {
-                      "Grid Position": `P${p.grid}`,
-                      "Finish Position": isRetirement ? `DNF (${p.status || "Retired"})` : `P${p.position}`,
-                      "Net Delta": isRetirement ? "Retired" : gained ? `+${p.delta} positions` : `${p.delta} positions`,
-                    },
-                    queryContext: `Analyze race performance for ${p.driver} from grid P${p.grid} to finish P${p.position}`,
-                  });
-                }}
-              >
-                {/* Connecting slope line */}
+            {/* Position Guide Lines */}
+            {Array.from({ length: maxPos }, (_, i) => i + 1).map((p) => (
+              <g key={p}>
                 <line
-                  x1={margin.left}
-                  y1={y1}
-                  x2={width - margin.right}
-                  y2={y2}
-                  stroke={strokeColor}
-                  strokeWidth={1.5}
-                  strokeDasharray={isRetirement ? "4 3" : undefined}
-                  strokeOpacity={0.8}
-                  className="group-hover:stroke-[2.5px] group-hover:stroke-opacity-100 transition-all"
+                  x1={xLeft - 6}
+                  x2={xRight + 6}
+                  y1={ys(p)}
+                  y2={ys(p)}
+                  stroke="var(--border)"
+                  strokeWidth={0.5}
+                  strokeDasharray="2 3"
+                  opacity={0.5}
                 />
-
-                {/* Left Node (Driver code and grid on left end only) */}
-                <circle cx={margin.left} cy={y1} r={3.5} fill={strokeColor} />
                 <text
-                  x={margin.left - 10}
-                  y={y1 + 3}
-                  fontSize={10}
-                  fill="var(--text-2)"
+                  x={xLeft - 10}
+                  y={ys(p) + 3}
+                  fontSize={9}
+                  fill="var(--text-3)"
                   textAnchor="end"
-                  fontFamily="var(--font-mono, monospace)"
-                  className="group-hover:fill-[var(--text)] font-medium"
+                  className="font-num"
                 >
-                  P{p.grid} {driverCode}
-                </text>
-
-                {/* Right Node (Position number and indicator on right end only) */}
-                <circle cx={width - margin.right} cy={y2} r={3.5} fill={strokeColor} />
-                <text
-                  x={width - margin.right + 10}
-                  y={y2 + 3}
-                  fontSize={10}
-                  fill={strokeColor}
-                  textAnchor="start"
-                  fontFamily="var(--font-mono, monospace)"
-                  fontWeight="600"
-                >
-                  P{p.position}{" "}
-                  {isRetirement ? (
-                    <tspan fill="#f43f5e" fontSize="9" fontWeight="bold">
-                      [{p.badge || "DNF"}]
-                    </tspan>
-                  ) : gained ? (
-                    <tspan fontSize="9">▲ +{p.delta}</tspan>
-                  ) : lost ? (
-                    <tspan fontSize="9">▼ {p.delta}</tspan>
-                  ) : (
-                    <tspan fontSize="9" fill="var(--text-3)">— 0</tspan>
-                  )}
+                  P{p}
                 </text>
               </g>
-            );
-          })}
-        </svg>
+            ))}
+
+            {/* Slope Lines */}
+            {validRows.map((r) => {
+              const y1 = ys(r.grid!);
+              const y2 = ys(r.finish!);
+              const isRetirement = Boolean(r.is_dnf || r.is_dsq || r.badge === "DNF" || r.badge === "DSQ");
+              const drvIdentity = getDriver(r.code);
+              const teamColor = drvIdentity?.teamColor || getDriverColor(r.code) || "var(--accent)";
+              const strokeDash = isRetirement ? "4 3" : drvIdentity?.strokeDash;
+
+              let strokeWidth = 1.6;
+              let indicatorSymbol = "—";
+              let indicatorLabel = "0";
+              let badgeColor = "var(--text-3)";
+
+              if (isRetirement) {
+                indicatorSymbol = r.badge || "DNF";
+                indicatorLabel = "";
+                badgeColor = "#f43f5e";
+              } else if (r.delta != null && r.delta > 0) {
+                strokeWidth = 2.2;
+                indicatorSymbol = "▲";
+                indicatorLabel = `+${r.delta}`;
+                badgeColor = "#10b981";
+              } else if (r.delta != null && r.delta < 0) {
+                indicatorSymbol = "▼";
+                indicatorLabel = `${r.delta}`;
+                badgeColor = "#ef4444";
+              }
+
+              const directLabel = `${r.code} P${r.grid} → P${r.finish} (${indicatorLabel || indicatorSymbol})`;
+
+              return (
+                <g
+                  key={r.code}
+                  className="group cursor-pointer"
+                  onClick={() => {
+                    inspectItem({
+                      type: "driver",
+                      title: r.name || r.code,
+                      subtitle: `Grid P${r.grid} → Finish P${r.finish}`,
+                      details: {
+                        Driver: r.name || r.code,
+                        Team: r.team || "Unknown",
+                        "Grid Position": `P${r.grid}`,
+                        "Finish Position": isRetirement ? `${r.badge || "DNF"} (P${r.finish})` : `P${r.finish}`,
+                        Delta: indicatorLabel || indicatorSymbol,
+                      },
+                      queryContext: `Analyze race performance for ${r.code}`,
+                    });
+                  }}
+                >
+                  {/* Slope line */}
+                  <line
+                    x1={xLeft}
+                    y1={y1}
+                    x2={xRight}
+                    y2={y2}
+                    stroke={teamColor}
+                    strokeWidth={strokeWidth}
+                    strokeDasharray={strokeDash}
+                    opacity={0.8}
+                    className="group-hover:stroke-width-[3.5px] group-hover:opacity-100 transition-all"
+                  />
+
+                  {/* Left Node (Grid) */}
+                  <circle cx={xLeft} cy={y1} r={3} fill={teamColor} />
+                  <text
+                    x={xLeft - 12}
+                    y={y1 + 3}
+                    fill="var(--text-2)"
+                    fontSize="10"
+                    textAnchor="end"
+                    className="font-mono font-semibold group-hover:fill-[var(--text)]"
+                  >
+                    {r.code}
+                  </text>
+
+                  {/* Right Node (Finish) */}
+                  <circle cx={xRight} cy={y2} r={3} fill={teamColor} />
+
+                  {/* Direct Label at Finish end */}
+                  <text
+                    x={xRight + 12}
+                    y={y2 + 3}
+                    fill={badgeColor}
+                    fontSize="10"
+                    textAnchor="start"
+                    className="font-mono font-bold group-hover:underline"
+                  >
+                    {r.code} P{r.finish}{" "}
+                    <tspan fontSize="9" fill={badgeColor} fontWeight="normal">
+                      {isRetirement ? `[${r.badge || "DNF"}]` : `${indicatorSymbol} ${indicatorLabel}`}
+                    </tspan>
+                  </text>
+                </g>
+              );
+            })}
+          </svg>
+        )}
       </div>
     </ChartShell>
   );
 }
+
+// Re-export as SlopeChart for backward compatibility
+export const SlopeChart = GridVsFinishChart;

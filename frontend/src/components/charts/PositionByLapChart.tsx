@@ -5,6 +5,7 @@ import { scaleLinear } from "d3-scale";
 import { ChartShell } from "./ChartShell";
 import { DriverChip } from "../primitives/kit";
 import { useInspector } from "../layouts/inspector-drawer";
+import { useIdentity } from "@/lib/useIdentity";
 
 interface SeriesData {
   driver: string;
@@ -26,6 +27,7 @@ interface PositionByLapProps {
 
 export function PositionByLapChart({ data, loading = false }: PositionByLapProps) {
   const { inspectItem } = useInspector();
+  const { getDriver, getDriverColor } = useIdentity();
   const series = data?.series || [];
   const meta = data?.driver_meta || [];
 
@@ -51,13 +53,15 @@ export function PositionByLapChart({ data, loading = false }: PositionByLapProps
 
   const maxLap = useMemo(() => {
     let m = 50;
+    const rootX = (data as any)?.x || [];
     series.forEach((s) => {
-      s.x.forEach((lap) => {
+      const laps = s.x || rootX;
+      laps.forEach((lap: number) => {
         if (lap > m) m = lap;
       });
     });
     return m;
-  }, [series]);
+  }, [series, data]);
 
   const xScale = useMemo(() => {
     return scaleLinear()
@@ -74,28 +78,38 @@ export function PositionByLapChart({ data, loading = false }: PositionByLapProps
   // CSV generation
   const csvData = useMemo(() => {
     if (!series.length) return "";
+    const rootX = (data as any)?.x || [];
     let csv = "Driver,Lap,Position\n";
     series.forEach((s) => {
-      s.x.forEach((lap, i) => {
-        csv += `${s.driver},${lap},${s.y[i]}\n`;
+      const code = s.driver || (s as any).code || "DRV";
+      const laps = s.x || rootX;
+      const yVals = s.y || [];
+      laps.forEach((lap: number, i: number) => {
+        csv += `${code},${lap},${yVals[i] ?? ""}\n`;
       });
     });
     return csv;
-  }, [series]);
+  }, [series, data]);
 
   const tableRows = useMemo(() => {
     const rows: (string | number)[][] = [];
+    const rootX = (data as any)?.x || [];
     series.forEach((s) => {
-      s.x.forEach((lap, i) => {
-        rows.push([s.driver, lap, `P${s.y[i]}`]);
+      const code = s.driver || (s as any).code || "DRV";
+      const laps = s.x || rootX;
+      const yVals = s.y || [];
+      laps.forEach((lap: number, i: number) => {
+        rows.push([code, lap, `P${yVals[i] ?? "-"}`]);
       });
     });
     return rows;
-  }, [series]);
+  }, [series, data]);
 
   const getDriverColour = (code: string) => {
+    const drv = getDriver(code);
+    if (drv?.teamColor) return drv.teamColor;
     const m = meta.find((d) => d.code === code);
-    return m?.colour || "var(--accent)";
+    return m?.colour || getDriverColor(code) || "var(--accent)";
   };
 
   return (
@@ -115,15 +129,18 @@ export function PositionByLapChart({ data, loading = false }: PositionByLapProps
       <div className="flex flex-col space-y-3">
         {/* Driver Toggle Legend */}
         <div className="flex flex-wrap gap-1.5 pb-2">
-          {series.map((s) => (
-            <DriverChip
-              key={s.driver}
-              code={s.driver}
-              colour={getDriverColour(s.driver)}
-              selected={isDriverVisible(s.driver)}
-              onToggle={() => toggleDriver(s.driver)}
-            />
-          ))}
+          {series.map((s) => {
+            const code = s.driver || (s as any).code || "DRV";
+            return (
+              <DriverChip
+                key={code}
+                code={code}
+                colour={getDriverColour(code)}
+                selected={isDriverVisible(code)}
+                onToggle={() => toggleDriver(code)}
+              />
+            );
+          })}
         </div>
 
         {/* SVG Bump Chart */}
@@ -171,48 +188,69 @@ export function PositionByLapChart({ data, loading = false }: PositionByLapProps
             ))}
 
             {/* Series Lines with draw-on animation */}
-            {series.map((s, idx) => {
-              if (!isDriverVisible(s.driver)) return null;
-              const points = s.x
-                .map((lap, i) => `${xScale(lap)},${yScale(s.y[i])}`)
+            {series.map((s) => {
+              const code = s.driver || (s as any).code || "DRV";
+              if (!isDriverVisible(code)) return null;
+              const rootX = (data as any)?.x || [];
+              const laps = s.x || rootX;
+              const yVals = s.y || [];
+              const points = laps
+                .map((lap: number, i: number) => `${xScale(lap)},${yScale(yVals[i])}`)
                 .join(" ");
-              const color = getDriverColour(s.driver);
+              const drvMeta = getDriver(code);
+              const color = drvMeta?.teamColor || getDriverColour(code);
+              const strokeDash = drvMeta?.strokeDash;
 
               return (
-                <g key={s.driver} className="cursor-pointer group">
+                <g key={code} className="cursor-pointer group">
                   <polyline
                     points={points}
                     fill="none"
                     stroke={color}
                     strokeWidth={1.8}
+                    strokeDasharray={strokeDash}
                     strokeLinejoin="round"
                     strokeLinecap="round"
                     className="transition-all hover:stroke-[3px]"
                     onClick={() => {
                       inspectItem({
                         type: "driver",
-                        title: s.driver,
+                        title: code,
                         subtitle: "Lap Position History",
                         details: {
-                          "Start Position": `P${s.y[0] || "-"}`,
-                          "Finish Position": `P${s.y[s.y.length - 1] || "-"}`,
-                          "Laps Charted": s.x.length,
+                          "Start Position": `P${yVals[0] || "-"}`,
+                          "Finish Position": `P${yVals[yVals.length - 1] || "-"}`,
+                          "Laps Charted": laps.length,
                         },
-                        queryContext: `Analyze position progression for ${s.driver}`,
+                        queryContext: `Analyze position progression for ${code}`,
                       });
                     }}
                   />
-                  {/* End of series label */}
-                  {s.x.length > 0 && (
+                  {/* Start of series label (left end) */}
+                  {laps.length > 0 && (
                     <text
-                      x={xScale(s.x[s.x.length - 1]) + 6}
-                      y={yScale(s.y[s.y.length - 1]) + 3}
+                      x={xScale(laps[0]) - 6}
+                      y={yScale(yVals[0]) + 3}
+                      fontSize={9}
+                      fontFamily="var(--font-num)"
+                      fill="var(--text-3)"
+                      textAnchor="end"
+                      className="group-hover:fill-[var(--text)] font-semibold"
+                    >
+                      {code}
+                    </text>
+                  )}
+                  {/* End of series label (right end) */}
+                  {laps.length > 0 && (
+                    <text
+                      x={xScale(laps[laps.length - 1]) + 6}
+                      y={yScale(yVals[yVals.length - 1]) + 3}
                       fontSize={10}
                       fontFamily="var(--font-num)"
                       fill={color}
                       fontWeight="bold"
                     >
-                      {s.driver}
+                      {code}
                     </text>
                   )}
                 </g>

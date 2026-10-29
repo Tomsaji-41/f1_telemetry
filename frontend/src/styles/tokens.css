@@ -1,25 +1,25 @@
 :root {
   /* surfaces */
-  --bg: #0B0F14;
-  --surface: #111821;
-  --raised: #172130;
-  --overlay: #1D2A3C;
-  --border: #243041;
-  --border-strong: #33445C;
+  --bg: #15151E;
+  --surface: #1E1E28;
+  --raised: #282836;
+  --overlay: #323244;
+  --border: #3A3A4C;
+  --border-strong: #525268;
 
   /* text */
-  --text: #E8EDF3;
-  --text-2: #9AA7B8;
-  --text-3: #66758A;
+  --text: #FFFFFF;
+  --text-2: #D0D0DC;
+  --text-3: #9E9EB0;
 
   /* interactive and status */
-  --accent: #3B82F6;
-  --accent-hover: #5B9BFF;
-  --focus: #93C5FD;
+  --accent: #E10600;
+  --accent-hover: #FF1801;
+  --focus: #FF5E5B;
   --positive: #34D399;
   --negative: #F87171;
   --warning: #FBBF24;
-  --live: #EF4444;
+  --live: #E10600;
 
   /* timing semantics */
   --sector-best: #A855F7;
@@ -32,6 +32,7 @@
   --tyre-hard: #E8EDF3;
   --tyre-inter: #22C55E;
   --tyre-wet: #3B82F6;
+  --tyre-unknown: #71717A;
 
   /* categorical data palette, colour-blind safe */
   --d1: #56B4E9;
@@ -47,8 +48,9 @@
   --radius-m: 8px;
   --radius-l: 12px;
 
-  --font-ui: "IBM Plex Sans", system-ui, sans-serif;
-  --font-num: "IBM Plex Mono", ui-monospace, monospace;
+  --font-heading: var(--font-heading), "Titillium Web", system-ui, sans-serif;
+  --font-ui: var(--font-ui), "IBM Plex Sans", system-ui, sans-serif;
+  --font-num: var(--font-num), "IBM Plex Mono", ui-monospace, monospace;
 
   --ease: cubic-bezier(.22, .8, .3, 1);
   --dur-1: 140ms;

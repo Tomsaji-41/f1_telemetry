@@ -27,14 +27,20 @@ interface TyreStintGanttProps {
 
 export function TyreStintGantt({ data, loading = false }: TyreStintGanttProps) {
   const { inspectItem } = useInspector();
-  const rawStints = data?.series || [];
+  const rawStints = (data?.series || (data as any)?.stints || []) as StintData[];
 
   // Group by driver
   const driverStints = useMemo(() => {
     const map: Record<string, StintData[]> = {};
     rawStints.forEach((s) => {
-      if (!map[s.driver]) map[s.driver] = [];
-      map[s.driver].push(s);
+      const d = s.driver || (s as any).code || "DRV";
+      if (!map[d]) map[d] = [];
+      map[d].push({
+        ...s,
+        driver: d,
+        start_lap: Number(s.start_lap) || 1,
+        end_lap: Number(s.end_lap) || Number(s.start_lap) || 1,
+      });
     });
     return map;
   }, [rawStints]);
@@ -61,12 +67,13 @@ export function TyreStintGantt({ data, loading = false }: TyreStintGanttProps) {
   }, [maxLap, width]);
 
   const getCompoundColor = (compound: string) => {
-    const norm = compound.toUpperCase();
+    const norm = (compound || "").toUpperCase();
     if (norm.includes("SOFT") || norm === "S") return "var(--tyre-soft)";
     if (norm.includes("MEDIUM") || norm === "M") return "var(--tyre-medium)";
     if (norm.includes("HARD") || norm === "H") return "var(--tyre-hard)";
     if (norm.includes("INTER") || norm === "I") return "var(--tyre-inter)";
-    return "var(--tyre-wet)";
+    if (norm.includes("WET") || norm === "W") return "var(--tyre-wet)";
+    return "var(--tyre-unknown)";
   };
 
   const csvData = useMemo(() => {
