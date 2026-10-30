@@ -1,4 +1,5 @@
 import datetime
+import time
 import logging
 from typing import Dict, Any, List, Optional
 try:
@@ -9,6 +10,84 @@ except ImportError:
 logger = logging.getLogger("sources.jolpica")
 
 JOLPICA_BASE = "https://api.jolpi.ca/ergast/f1"
+
+_LATEST_SESSION_CACHE = {"data": None, "ts": 0.0}
+
+def _extract_target_list(data: Dict[str, Any]) -> Optional[List[Any]]:
+    """Helper to locate the paginated array inside an MRData structure."""
+    mr = data.get("MRData", {})
+    if "RaceTable" in mr:
+        races = mr["RaceTable"].get("Races", [])
+        if races and isinstance(races, list) and len(races) > 0:
+            r0 = races[0]
+            for key in ("Results", "Laps", "QualifyingResults", "PitStops"):
+                if key in r0 and isinstance(r0[key], list):
+                    return r0[key]
+            return races
+    if "StandingsTable" in mr:
+        lists = mr["StandingsTable"].get("StandingsLists", [])
+        if lists and isinstance(lists, list) and len(lists) > 0:
+            l0 = lists[0]
+            for key in ("DriverStandings", "ConstructorStandings"):
+                if key in l0 and isinstance(l0[key], list):
+                    return l0[key]
+    for tbl_key in ("DriverTable", "ConstructorTable", "CircuitTable", "SeasonTable"):
+        if tbl_key in mr:
+            for key in ("Drivers", "Constructors", "Circuits", "Seasons"):
+                if key in mr[tbl_key] and isinstance(mr[tbl_key][key], list):
+                    return mr[tbl_key][key]
+    return None
+
+def fetch_paginated_mrdata(base_url: str, ttl: float, page_size: int = 100) -> Optional[Dict[str, Any]]:
+    """
+    Fetch all pages of an Ergast/Jolpica endpoint by looping limit/offset until MRData.total is reached.
+    Merges table arrays across pages before returning.
+    """
+    clean_url = base_url.split("?")[0]
+    master_key = cache.build_cache_key("jolpica_paginated", clean_url)
+    cached = cache.get_json(master_key)
+    if cached is not None:
+        return cached
+
+    sep = "&" if "?" in base_url else "?"
+    first_url = f"{base_url}{sep}limit={page_size}&offset=0"
+    first_page = cache.cached_get_json(first_url, ttl)
+    if not first_page or "MRData" not in first_page:
+        return first_page
+
+    mr = first_page["MRData"]
+    try:
+        total = int(mr.get("total", 0))
+        offset = int(mr.get("offset", 0))
+        limit = int(mr.get("limit", page_size))
+    except (ValueError, TypeError):
+        return first_page
+
+    if total <= limit:
+        cache.set_json(master_key, first_page, ttl)
+        return first_page
+
+    target_list = _extract_target_list(first_page)
+    if target_list is None:
+        cache.set_json(master_key, first_page, ttl)
+        return first_page
+
+    curr_offset = offset + limit
+    while curr_offset < total:
+        next_url = f"{base_url}{sep}limit={page_size}&offset={curr_offset}"
+        next_page = cache.cached_get_json(next_url, ttl)
+        if not next_page or "MRData" not in next_page:
+            break
+        next_list = _extract_target_list(next_page)
+        if not next_list:
+            break
+        target_list.extend(next_list)
+        curr_offset += limit
+
+    mr["limit"] = str(total)
+    mr["offset"] = "0"
+    cache.set_json(master_key, first_page, ttl)
+    return first_page
 
 def _get_ttl_for_year(year: int) -> float:
     current_year = datetime.datetime.now().year
@@ -65,7 +144,12 @@ def get_latest_completed_session() -> Dict[str, Any]:
     """
     Runtime session resolver: queries Jolpica schedule and race results
     to dynamically identify the most recent completed Grand Prix with classified results.
+    Cached in-memory for 5 minutes.
     """
+    now = time.time()
+    if _LATEST_SESSION_CACHE["data"] and (now - _LATEST_SESSION_CACHE["ts"] < 300):
+        return _LATEST_SESSION_CACHE["data"]
+
     current_year = datetime.datetime.now().year
     today = datetime.date.today()
     
@@ -81,7 +165,7 @@ def get_latest_completed_session() -> Dict[str, Any]:
                         rnd = int(r.get("round", 1))
                         res = fetch_race_results(yr, rnd)
                         if res.get("status") == "ok" and res.get("results"):
-                            return {
+                            val = {
                                 "year": yr,
                                 "round": rnd,
                                 "grand_prix": r.get("grand_prix") or res.get("grand_prix", ""),
@@ -89,17 +173,23 @@ def get_latest_completed_session() -> Dict[str, Any]:
                                 "circuit": r.get("circuit_name", "") or res.get("circuit", ""),
                                 "circuit_id": r.get("circuit_id", "")
                             }
+                            _LATEST_SESSION_CACHE["data"] = val
+                            _LATEST_SESSION_CACHE["ts"] = now
+                            return val
                 except Exception:
                     continue
 
-    return {
+    fallback_val = {
         "year": 2024,
         "round": 24,
         "grand_prix": "Abu Dhabi Grand Prix",
         "date": "2024-12-08",
         "circuit": "Yas Marina Circuit",
-        "circuit_id": "yas_marina"
+        "circuit_id": "yas_marina",
     }
+    _LATEST_SESSION_CACHE["data"] = fallback_val
+    _LATEST_SESSION_CACHE["ts"] = now
+    return fallback_val
 
 def get_available_sessions() -> Dict[str, Any]:
     """
@@ -313,6 +403,9 @@ def map_constructor_standings(js: dict, total_rounds: int) -> dict:
             "position": pos_val,
             "team": team_name,
             "constructor": team_name,
+            "constructorId": cons.get("constructorId", ""),
+            "constructor_id": cons.get("constructorId", ""),
+            "nationality": cons.get("nationality", ""),
             "points": int(pts) if pts == int(pts) else pts,
             "wins": int(s.get("wins", 0)),
         })
@@ -367,46 +460,92 @@ def fetch_standings(year: int, kind: str = "drivers", after_round: Optional[int]
     else:
         return map_constructor_standings(data, total_rounds)
 
+def fetch_all_seasons() -> List[Dict[str, Any]]:
+    """Fetches all seasons from Jolpica fully paginated until total is reached (Phase P1/P5)."""
+    cache_key = "jolpica_all_seasons_v3"
+    cached = cache.get_json(cache_key)
+    if cached is not None:
+        return cached
+
+    url = f"{JOLPICA_BASE}/seasons.json"
+    data = fetch_paginated_mrdata(url, ttl=cache.TTL_PAST_SEASON, page_size=100)
+    if not data or "MRData" not in data:
+        return []
+
+    s_list = data["MRData"].get("SeasonTable", {}).get("Seasons", [])
+    result = []
+    for s in s_list:
+        try:
+            yr = int(s.get("season", 0))
+            if yr > 0:
+                result.append({"year": yr, "url": s.get("url", "")})
+        except (ValueError, TypeError):
+            continue
+
+    if result:
+        cache.set_json(cache_key, result, cache.TTL_CURRENT_ROUND)
+    return result
+
+def fetch_single_season_champion(yr: int) -> Dict[str, Any]:
+    """Fetch and cache champion for a single season."""
+    current_year = datetime.datetime.now().year
+    ttl = cache.TTL_PAST_SEASON if yr < current_year else cache.TTL_CURRENT_STANDINGS
+    cache_key = cache.build_cache_key("f1_champion_year_v2", yr)
+    cached = cache.get_json(cache_key)
+    if cached is not None:
+        return cached
+
+    url_d = f"{JOLPICA_BASE}/{yr}/driverStandings/1.json"
+    data_d = cache.cached_get_json(url_d, ttl)
+
+    url_c = f"{JOLPICA_BASE}/{yr}/constructorStandings/1.json"
+    data_c = cache.cached_get_json(url_c, ttl)
+
+    d_champ = None
+    d_pts = 0.0
+    d_wins = 0
+    c_champ = None
+    c_pts = 0.0
+
+    if data_d and "MRData" in data_d:
+        lists = data_d["MRData"].get("StandingsTable", {}).get("StandingsLists", [])
+        if lists and lists[0].get("DriverStandings"):
+            top_d = lists[0]["DriverStandings"][0]
+            driver = top_d.get("Driver", {})
+            full_name = f"{driver.get('givenName', '')} {driver.get('familyName', '')}".strip()
+            if full_name:
+                d_champ = full_name
+                d_pts = float(top_d.get("points", 0))
+                d_wins = int(top_d.get("wins", 0))
+
+    if data_c and "MRData" in data_c:
+        lists = data_c["MRData"].get("StandingsTable", {}).get("StandingsLists", [])
+        if lists and lists[0].get("ConstructorStandings"):
+            top_c = lists[0]["ConstructorStandings"][0]
+            team_name = top_c.get("Constructor", {}).get("name", "")
+            if team_name:
+                c_champ = team_name
+                c_pts = float(top_c.get("points", 0))
+
+    champ_record = {
+        "year": yr,
+        "driver": d_champ,
+        "driver_champion": d_champ or "TBD",
+        "driver_points": d_pts,
+        "driver_wins": d_wins,
+        "constructor": c_champ,
+        "constructor_champion": c_champ or "TBD",
+        "constructor_points": c_pts
+    }
+    if d_champ:
+        cache.set_json(cache_key, champ_record, ttl)
+    return champ_record
+
 def fetch_champions(start_year: int, end_year: int) -> Dict[str, Any]:
     champions = []
     for yr in range(start_year, end_year + 1):
-        url_d = f"{JOLPICA_BASE}/{yr}/driverStandings/1.json"
-        data_d = cache.cached_get_json(url_d, cache.TTL_PAST_SEASON)
-        
-        url_c = f"{JOLPICA_BASE}/{yr}/constructorStandings/1.json"
-        data_c = cache.cached_get_json(url_c, cache.TTL_PAST_SEASON)
-        
-        d_champ = "Unknown"
-        d_pts = 0.0
-        d_wins = 0
-        c_champ = "None"
-        c_pts = 0.0
-        
-        if data_d and "MRData" in data_d:
-            lists = data_d["MRData"].get("StandingsTable", {}).get("StandingsLists", [])
-            if lists and lists[0].get("DriverStandings"):
-                top_d = lists[0]["DriverStandings"][0]
-                driver = top_d.get("Driver", {})
-                d_champ = f"{driver.get('givenName', '')} {driver.get('familyName', '')}".strip()
-                d_pts = float(top_d.get("points", 0))
-                d_wins = int(top_d.get("wins", 0))
-                
-        if data_c and "MRData" in data_c:
-            lists = data_c["MRData"].get("StandingsTable", {}).get("StandingsLists", [])
-            if lists and lists[0].get("ConstructorStandings"):
-                top_c = lists[0]["ConstructorStandings"][0]
-                c_champ = top_c.get("Constructor", {}).get("name", "")
-                c_pts = float(top_c.get("points", 0))
-                
-        champions.append({
-            "year": yr,
-            "driver_champion": d_champ,
-            "driver_points": d_pts,
-            "driver_wins": d_wins,
-            "constructor_champion": c_champ,
-            "constructor_points": c_pts
-        })
-        
+        champions.append(fetch_single_season_champion(yr))
+
     return {
         "status": "ok",
         "start_year": start_year,

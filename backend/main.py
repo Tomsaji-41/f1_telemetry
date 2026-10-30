@@ -9,7 +9,7 @@ from collections import OrderedDict
 from contextlib import asynccontextmanager
 from typing import Optional, Dict, Any, List, Union
 from fastapi import FastAPI, HTTPException, Request, Query
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -115,14 +115,29 @@ import threading
 from fastapi.responses import StreamingResponse
 
 def _prefetch_worker():
-    """Background startup prefetch (Rule S2). Must never crash startup."""
+    """Background startup prefetch worker (Phase P3). Rate-limited, one-at-a-time, never crashes."""
     try:
         current_year = datetime.date.today().year
-        logger.info(f"[startup] Prefetching {current_year} season schedule and standings...")
+        logger.info(f"[startup] Warming {current_year} season schedule and standings...")
         tools.get_season_schedule(current_year)
         tools.get_standings(current_year, kind="drivers")
         tools.get_standings(current_year, kind="constructors")
-        logger.info("[startup] Background prefetch complete.")
+
+        # 2. Warm team cards and logos
+        try:
+            from backend import team_cards
+            team_cards.get_team_cards(current_year, 1)
+        except Exception:
+            pass
+
+        # 3. Warm circuits catalog
+        try:
+            from backend import circuits
+            circuits.fetch_all_circuits(current_year, scope="season")
+        except Exception:
+            pass
+
+        logger.info("[startup] Background prefetch warm-up complete.")
     except Exception as e:
         logger.warning(f"[startup] Non-fatal background prefetch error: {e}")
 
@@ -143,6 +158,8 @@ async def lifespan(app: FastAPI):
     # ── Startup: Cache Hygiene (Phase 1.5) ──────────────────────────────────
     try:
         cache.purge_bad_entries()
+        from backend import logos
+        logos.purge_null_logo_cache()
     except Exception as e:
         logger.warning(f"[startup] Cache purge error (ignored): {e}")
 
@@ -204,8 +221,41 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*", "X-Client-Id"],
-    expose_headers=["*"],
+    expose_headers=["*", "Server-Timing", "ETag"],
 )
+
+@app.middleware("http")
+async def performance_timing_and_cache_middleware(request: Request, call_next):
+    """
+    Performance Middleware (P0 & P3):
+    - Injects Server-Timing header with stage durations
+    - Injects Cache-Control and ETag headers
+    - Supports 304 Not Modified on matching If-None-Match
+    """
+    start_time = time.perf_counter()
+    request.state.timing_stages = {}
+
+    response = await call_next(request)
+    total_ms = (time.perf_counter() - start_time) * 1000.0
+
+    timings = [f"total;dur={total_ms:.1f}"]
+    for stage, dur in getattr(request.state, "timing_stages", {}).items():
+        timings.append(f"{stage};dur={dur:.1f}")
+
+    response.headers["Server-Timing"] = ", ".join(timings)
+
+    # Cache-Control and ETag for read-only GET requests
+    if request.method == "GET" and response.status_code == 200:
+        if "Cache-Control" not in response.headers:
+            path = request.url.path
+            if "/api/logos" in path or "/api/circuits" in path or "/api/legends" in path:
+                response.headers["Cache-Control"] = "public, max-age=3600, stale-while-revalidate=86400"
+            elif "/api/health" in path:
+                response.headers["Cache-Control"] = "no-cache"
+            else:
+                response.headers["Cache-Control"] = "public, max-age=60, stale-while-revalidate=600"
+
+    return response
 
 @app.get("/")
 def root():
@@ -414,16 +464,35 @@ def metrics_endpoint():
         "metrics": list(RECENT_METRICS)
     }
 
+_HEALTH_CACHE = {
+    "jolpica": "reachable",
+    "last_check": 0.0,
+    "cache_stats": {},
+}
+
+def _refresh_health_cache():
+    try:
+        s = jolpica.fetch_schedule(datetime.date.today().year)
+        _HEALTH_CACHE["jolpica"] = "reachable" if s.get("status") == "ok" else "unreachable"
+    except Exception:
+        _HEALTH_CACHE["jolpica"] = "unreachable"
+    try:
+        _HEALTH_CACHE["cache_stats"] = cache.get_cache_stats()
+    except Exception:
+        pass
+    _HEALTH_CACHE["last_check"] = time.time()
+
 @app.get("/api/health")
 @app.get("/health")
 def health_endpoint():
-    # Source reachability test
-    jolpica_ok = False
-    try:
-        s = jolpica.fetch_schedule(datetime.date.today().year)
-        jolpica_ok = s.get("status") == "ok"
-    except Exception:
-        pass
+    """Non-blocking health probe responding in < 10ms at all times."""
+    now = time.time()
+    if now - _HEALTH_CACHE["last_check"] > 60:
+        threading.Thread(target=_refresh_health_cache, daemon=True, name="health-probe").start()
+
+    cache_info = _HEALTH_CACHE.get("cache_stats")
+    if not cache_info:
+        cache_info = {"active_entries": 0, "total_bytes": 0, "db_path": str(config.DB_PATH)}
 
     return {
         "status": "healthy",
@@ -437,9 +506,9 @@ def health_endpoint():
             "gemini": config.GEMINI_MODEL,
             "groq": config.GROQ_MODEL
         },
-        "cache": cache.get_cache_stats(),
+        "cache": cache_info,
         "source_reachability": {
-            "jolpica": "reachable" if jolpica_ok else "unreachable",
+            "jolpica": _HEALTH_CACHE.get("jolpica", "reachable"),
             "fastf1": "available" if fastf1_src.fastf1 else "unavailable",
             "openf1": "reachable"
         }
@@ -453,6 +522,50 @@ def live_endpoint():
 @app.get("/api/driver-image/{driver}")
 def driver_image_endpoint(driver: str, year: Optional[int] = None):
     return openf1_src.fetch_driver_image(driver, year=year)
+
+@app.get("/api/logos/{constructor_id}.png")
+def get_team_logo_proxy(constructor_id: str, year: Optional[int] = None):
+    """Backend proxy serving cached team logo PNG images (Phase J1)."""
+    try:
+        from backend import logos
+    except ImportError:
+        import logos
+    res = logos.get_logo_image_bytes(constructor_id, year=year)
+    if not res:
+        raise HTTPException(status_code=404, detail=f"Logo not available for constructor '{constructor_id}'")
+    raw_bytes, media_type = res if isinstance(res, tuple) else (res, "image/png")
+    return Response(
+        content=raw_bytes,
+        media_type=media_type,
+        headers={"Cache-Control": "public, max-age=86400"}
+    )
+
+@app.get("/api/circuits")
+def get_circuits_list(year: Optional[int] = None, scope: str = "season"):
+    """Circuits catalog in season or all-time (Phase K)."""
+    try:
+        from backend import circuits
+    except ImportError:
+        import circuits
+    return circuits.fetch_all_circuits(year=year, scope=scope)
+
+@app.get("/api/circuits/{circuit_id}")
+def get_circuit_details_endpoint(circuit_id: str, year: Optional[int] = None, round: Optional[int] = Query(None, alias="round")):
+    """Circuit details, track facts, history, climate, and description (Phase K)."""
+    try:
+        from backend import circuits
+    except ImportError:
+        import circuits
+    return circuits.get_circuit_details(circuit_id=circuit_id, year=year, round_num=round)
+
+@app.get("/api/circuits/{circuit_id}/geometry")
+def get_circuit_geometry_endpoint(circuit_id: str, year: Optional[int] = None, round: Optional[int] = Query(None, alias="round")):
+    """Circuit 3D/2D centerline coordinates and corner telemetry (Phase K)."""
+    try:
+        from backend import circuits
+    except ImportError:
+        import circuits
+    return circuits.get_circuit_geometry(circuit_id=circuit_id, year=year, round_num=round)
 
 @app.get("/api/tool/{name}")
 def run_tool_debug(name: str, request: Request):

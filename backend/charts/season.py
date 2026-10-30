@@ -98,8 +98,8 @@ def grid_vs_finish(year: int, rnd: int) -> Dict[str, Any]:
         rows = []
         for r in res:
             code = r.get("code") or (r.get("driver_id", "")[:3].upper() if r.get("driver_id") else "UNK")
-            full_name = f"{r.get('given_name', '')} {r.get('family_name', '')}".strip() or code
-            team = r.get("constructor_name") or r.get("team") or "Unknown"
+            full_name = r.get("driver") or f"{r.get('given_name', '')} {r.get('family_name', '')}".strip() or code
+            team = r.get("constructor") or r.get("constructor_name") or r.get("team") or "Unknown"
             grid_pos = r.get("grid", 0)
             finish = r.get("position")
             status = r.get("status", "")
@@ -132,8 +132,10 @@ def grid_vs_finish(year: int, rnd: int) -> Dict[str, Any]:
 
             rows.append(
                 {
+                    "driverId": r.get("driver_id"),
                     "code": code,
                     "name": full_name,
+                    "driver": full_name,
                     "team": team,
                     "grid": grid_val,
                     "finish": finish_val,

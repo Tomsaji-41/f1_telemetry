@@ -17,9 +17,15 @@ GEMINI_MODEL = _clean(os.getenv("GEMINI_MODEL", "gemini-2.5-flash")) or "gemini-
 GROQ_MODEL = _clean(os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")) or "llama-3.3-70b-versatile"
 GEMINI_FIRST_TOKEN_TIMEOUT_S = float(os.getenv("GEMINI_FIRST_TOKEN_TIMEOUT_S", "3"))
 GEMINI_TOTAL_TIMEOUT_S = float(os.getenv("GEMINI_TOTAL_TIMEOUT_S", "8"))
-CACHE_DIR = BASE_DIR / "f1_cache"
+
+# Cache & data storage paths (outside watched backend source tree)
+CACHE_DIR = Path(os.getenv("F1_CACHE_DIR", BASE_DIR / "f1_cache"))
 CACHE_DIR.mkdir(exist_ok=True)
-DB_PATH = BASE_DIR / "cache.sqlite"
+DB_PATH = Path(os.getenv("F1_DB_PATH", BASE_DIR / "cache.sqlite"))
+DATA_DIR = Path(os.getenv("F1_DATA_DIR", BASE_DIR / "data"))
+DATA_DIR.mkdir(exist_ok=True)
+LOGS_DIR = Path(os.getenv("F1_LOGS_DIR", BASE_DIR / "logs"))
+LOGS_DIR.mkdir(exist_ok=True)
 
 BACKEND_HOST = os.getenv("BACKEND_HOST", "127.0.0.1")
 BACKEND_PORT = int(os.getenv("BACKEND_PORT", 8000))

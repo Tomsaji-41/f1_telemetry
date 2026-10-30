@@ -4,6 +4,8 @@ Identity and Colours Service (Phase 2).
 Resolves official Jolpica driver codes, permanent numbers, constructor mappings,
 and OpenF1 / FastF1 dynamic team colors with WCAG 2.1 text contrast and teammate disambiguation.
 """
+import os
+import json
 import unicodedata
 import re
 import logging
@@ -74,7 +76,8 @@ def resolve_wikipedia_headshot(name: str, wiki_url: Optional[str] = None) -> Opt
         if not slug:
             return None
         url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{slug}"
-        data = cache.cached_get_json(url, cache.TTL_PAST_SEASON)
+        headers = {"User-Agent": "F1TelemetryApp/1.0 (https://github.com/example/f1_telemetry)"}
+        data = cache.cached_get_json(url, cache.TTL_PAST_SEASON, headers=headers)
         if isinstance(data, dict):
             thumb = data.get("thumbnail")
             if isinstance(thumb, dict) and thumb.get("source"):
@@ -85,20 +88,19 @@ def resolve_wikipedia_headshot(name: str, wiki_url: Optional[str] = None) -> Opt
 
 
 def get_openf1_fallback_headshot(num: str, acr: str, name: str) -> Optional[str]:
-    """Fallback search across recent OpenF1 seasons (2024, 2023) if not found in current season."""
-    for past_year in [2024, 2023]:
-        url = f"https://api.openf1.org/v1/drivers?year={past_year}"
-        data = cache.cached_get_json(url, cache.TTL_PAST_SEASON)
-        if isinstance(data, list):
-            norm_name = normalize_text(name)
-            for d in data:
-                d_num = str(d.get("driver_number") or "").strip()
-                d_acr = (d.get("name_acronym") or "").strip().upper()
-                d_name = normalize_text(d.get("full_name") or "")
-                hs = d.get("headshot_url")
-                if hs:
-                    if (num and d_num == num) or (acr and d_acr == acr) or (norm_name and norm_name == d_name):
-                        return hs
+    """Fallback search across OpenF1 drivers if not found in current session."""
+    url = "https://api.openf1.org/v1/drivers"
+    data = cache.cached_get_json(url, cache.TTL_PAST_SEASON)
+    if isinstance(data, list):
+        norm_name = normalize_text(name)
+        for d in data:
+            d_num = str(d.get("driver_number") or "").strip()
+            d_acr = (d.get("name_acronym") or "").strip().upper()
+            d_name = normalize_text(d.get("full_name") or "")
+            hs = d.get("headshot_url")
+            if hs:
+                if (num and d_num == num) or (acr and d_acr == acr) or (norm_name and norm_name == d_name):
+                    return hs
     return None
 
 
@@ -112,7 +114,7 @@ def get_season_identity(year: Optional[int] = None) -> Dict[str, Any]:
         latest = jolpica.get_latest_completed_session()
         year = latest.get("year", datetime.date.today().year)
 
-    cache_key = f"identity_season_v2:{year}"
+    cache_key = f"identity_season_v3:{year}"
     cached = cache.get_json(cache_key)
     if cached is not None:
         return cached
@@ -134,8 +136,9 @@ def get_season_identity(year: Optional[int] = None) -> Dict[str, Any]:
     # 2. OpenF1 drivers data for 2023+ (team_colour, headshot_url, name_acronym, driver_number)
     openf1_data = []
     if year >= 2023:
-        url_of1 = f"https://api.openf1.org/v1/drivers?year={year}"
-        raw_of1 = cache.cached_get_json(url_of1, ttl)
+        raw_of1 = cache.cached_get_json("https://api.openf1.org/v1/drivers?session_key=latest", ttl)
+        if not isinstance(raw_of1, list) or not raw_of1:
+            raw_of1 = cache.cached_get_json("https://api.openf1.org/v1/drivers", ttl)
         if isinstance(raw_of1, list):
             openf1_data = raw_of1
 
@@ -158,15 +161,42 @@ def get_season_identity(year: Optional[int] = None) -> Dict[str, Any]:
             if fn: of1_by_name[fn] = {**d, "color": clean_col}
             if t_name: of1_team_colors[t_name] = clean_col
 
-    # FastF1 plotting fallback for pre-2023
+    # FastF1 runtime constants loader for official constructor colors
     fastf1_colors: Dict[str, str] = {}
     try:
         import fastf1.plotting
-        if hasattr(fastf1.plotting, "TEAM_COLORS"):
-            for t_k, c_v in fastf1.plotting.TEAM_COLORS.items():
-                fastf1_colors[normalize_text(t_k)] = c_v
-    except Exception:
-        pass
+        const_file = os.path.join(os.path.dirname(fastf1.plotting.__file__), "constants.json")
+        if os.path.exists(const_file):
+            with open(const_file, "r", encoding="utf-8") as f:
+                const_data = json.load(f)
+
+            yr_str = str(year)
+            available_years = sorted([int(y) for y in const_data.keys() if y.isdigit()], reverse=True)
+            chosen_year = None
+            if yr_str in const_data:
+                chosen_year = yr_str
+            elif available_years:
+                chosen_year = str(min(available_years, key=lambda y: abs(y - year)))
+
+            def extract_teams(y_key: str):
+                t_dict = const_data.get(y_key, {}).get("teams", {})
+                for t_key, t_info in t_dict.items():
+                    colors = t_info.get("colors", {})
+                    hex_col = colors.get("official") or colors.get("fastf1")
+                    if hex_col:
+                        clean_hex = f"#{hex_col.lstrip('#')}".upper()
+                        fastf1_colors[normalize_text(t_key)] = clean_hex
+                        sn = t_info.get("short_name")
+                        if sn:
+                            fastf1_colors[normalize_text(sn)] = clean_hex
+
+            # Populate historical years first as fallbacks, then overwrite with target season
+            for av_yr in available_years:
+                extract_teams(str(av_yr))
+            if chosen_year:
+                extract_teams(chosen_year)
+    except Exception as e:
+        logger.warning(f"Could not load FastF1 constants.json team colors: {e}")
 
     # 3. Build Driver Identity Map
     drivers_map: Dict[str, Dict[str, Any]] = {}
@@ -238,8 +268,14 @@ def get_season_identity(year: Optional[int] = None) -> Dict[str, Any]:
         # Try FastF1 team color
         if not color:
             norm_c = normalize_text(c_name)
+            norm_cid = normalize_text(c_id)
+            c_words = set(norm_c.split())
             for fk, fcol in fastf1_colors.items():
-                if fk in norm_c or norm_c in fk:
+                fk_words = set(fk.split())
+                if (fk == norm_c or fk in norm_c or norm_c in fk or
+                    fk == norm_cid or fk in norm_cid or norm_cid in fk or
+                    (fk_words and fk_words.issubset(c_words)) or
+                    (c_words and fk in c_words)):
                     color = fcol
                     break
 
@@ -273,6 +309,9 @@ def get_season_identity(year: Optional[int] = None) -> Dict[str, Any]:
                 "textColor": text_color,
                 "drivers": []
             }
+        elif teams_map[c_id].get("teamColor") == config.NEUTRAL_COLOUR and color != config.NEUTRAL_COLOUR:
+            teams_map[c_id]["teamColor"] = color
+            teams_map[c_id]["textColor"] = text_color
 
     # 4. Teammate disambiguation (2.5) & 2-driver check (2.3)
     for c_id, d_ids in team_driver_ids.items():
@@ -303,3 +342,114 @@ def get_season_identity(year: Optional[int] = None) -> Dict[str, Any]:
 
     cache.set_json(cache_key, result, ttl)
     return result
+
+def get_round_identity(year: int, round_num: int) -> Dict[str, Any]:
+    """
+    Returns unified identity map for drivers and teams tailored to a specific round,
+    reflecting mid-season driver substitutions, seat swaps, and round-specific constructor lineups.
+    """
+    cache_key = f"identity_round_v3:{year}:{round_num}"
+    cached = cache.get_json(cache_key)
+    if cached is not None:
+        return cached
+
+    season_id = get_season_identity(year)
+    s_drivers = season_id.get("drivers", {})
+    s_teams = season_id.get("teams", {})
+
+    # Fetch race results for the specific round
+    race_res = jolpica.fetch_race_results(year, round_num)
+    results_list = race_res.get("results", []) if race_res.get("status") == "ok" else []
+
+    if not results_list:
+        # Fall back to qualifying or season identity if race results not yet published
+        q_res = jolpica.fetch_qualifying_results(year, round_num)
+        results_list = q_res.get("qualifying", []) if q_res.get("status") == "ok" else []
+
+    if not results_list:
+        res = dict(season_id)
+        res["round"] = round_num
+        return res
+
+    drivers_map: Dict[str, Dict[str, Any]] = {}
+    teams_map: Dict[str, Dict[str, Any]] = {}
+    team_driver_ids: Dict[str, List[str]] = {}
+
+    for r in results_list:
+        d_id = r.get("driver_id") or r.get("driverId") or ""
+        code = r.get("code") or (d_id[:3].upper() if d_id else "DRV")
+        name = r.get("driver") or r.get("name") or code
+        c_name = r.get("constructor") or r.get("team") or "F1 Team"
+        c_id = normalize_text(c_name).replace(" ", "_")
+        num = str(r.get("number", "")).strip()
+
+        base_drv = s_drivers.get(d_id, {})
+        base_team = s_teams.get(c_id, {})
+
+        team_color = base_drv.get("teamColor") or base_team.get("teamColor") or config.NEUTRAL_COLOUR
+        text_color = base_drv.get("textColor") or base_team.get("textColor") or get_readable_text_color(team_color)
+        headshot = base_drv.get("headshotUrl") or resolve_wikipedia_headshot(name)
+
+        drivers_map[d_id] = {
+            "driverId": d_id,
+            "code": code,
+            "number": num if num else base_drv.get("number", "#-"),
+            "name": name,
+            "givenName": base_drv.get("givenName", name.split()[0] if name else ""),
+            "familyName": base_drv.get("familyName", name.split()[-1] if name else ""),
+            "nationality": base_drv.get("nationality", ""),
+            "dob": base_drv.get("dob", ""),
+            "team": c_name,
+            "teamId": c_id,
+            "teamColor": team_color,
+            "textColor": text_color,
+            "headshotUrl": headshot,
+        }
+
+        team_driver_ids.setdefault(c_id, []).append(d_id)
+        if c_id not in teams_map:
+            teams_map[c_id] = {
+                "teamId": c_id,
+                "name": c_name,
+                "teamColor": team_color,
+                "textColor": text_color,
+                "drivers": []
+            }
+
+    # Teammate disambiguation for this specific round
+    for c_id, d_ids in team_driver_ids.items():
+        teams_map[c_id]["drivers"] = d_ids
+        for idx, did in enumerate(d_ids):
+            drv = drivers_map[did]
+            if idx == 0:
+                drv["isSecondDriver"] = False
+                drv["dash"] = None
+                drv["strokeDash"] = None
+                drv["tintColor"] = drv["teamColor"]
+            else:
+                drv["isSecondDriver"] = True
+                drv["dash"] = "4 2"
+                drv["strokeDash"] = "4 2"
+                drv["tintColor"] = lighten_color(drv["teamColor"], 0.35)
+
+    current_year = datetime.date.today().year
+    ttl = cache.TTL_PAST_SEASON if year < current_year else cache.TTL_CURRENT_ROUND
+    result = {
+        "status": "ok",
+        "source": "Jolpica & OpenF1",
+        "year": year,
+        "round": round_num,
+        "drivers": drivers_map,
+        "teams": teams_map,
+    }
+    cache.set_json(cache_key, result, ttl)
+    return result
+
+def get_identity(year: Optional[int] = None, round: Optional[int] = None) -> Dict[str, Any]:
+    """Unified entrypoint: resolves round-specific identity if round is supplied, else season identity."""
+    if year is None:
+        latest = jolpica.get_latest_completed_session()
+        year = latest.get("year", datetime.date.today().year)
+    if round is not None:
+        return get_round_identity(year, round)
+    return get_season_identity(year)

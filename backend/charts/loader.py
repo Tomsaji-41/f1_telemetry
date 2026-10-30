@@ -9,6 +9,7 @@ peek() never returns a partial object.
 import collections
 import logging
 import threading
+import time
 from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 import numpy as np
@@ -36,6 +37,8 @@ except ImportError:
 
 # Bounded LRU memory cache (max 4 sessions, ~600 MB)
 MAX_SESSIONS = 4
+# Limit concurrent FastF1 session loads to 2 to prevent thread/disk exhaustion
+_CONCURRENT_LOAD_SEMAPHORE = threading.Semaphore(2)
 # (year, rnd, session_type) -> FastF1 Session or SessionAdapter
 _REG: collections.OrderedDict = collections.OrderedDict()
 _LOCKS: Dict[Tuple[int, int, str], threading.Lock] = {}
@@ -336,31 +339,33 @@ def get_session(year: int, rnd: int, ident: str = "R", telemetry: bool = False):
                 _REG.move_to_end(k)
                 return _REG[k]
 
+        t_start = time.perf_counter()
         logger.info("Loading session %s R%s %s (shared session)", year, rnd, ident)
         ses = None
 
         if fastf1 is not None and year <= 2024:
-            try:
-                f_ses = fastf1.get_session(year, rnd, ident)
-                f_ses.load(
-                    laps=True,
-                    telemetry=telemetry,
-                    weather=telemetry,
-                    messages=False,
-                )
+            with _CONCURRENT_LOAD_SEMAPHORE:
                 try:
-                    _laps = f_ses.laps
-                    if _laps is None or len(_laps) < 10:
-                        raise RuntimeError(f"Session data not published yet for {k}")
-                    ses = f_ses
+                    f_ses = fastf1.get_session(year, rnd, ident)
+                    f_ses.load(
+                        laps=True,
+                        telemetry=telemetry,
+                        weather=telemetry,
+                        messages=False,
+                    )
+                    try:
+                        _laps = f_ses.laps
+                        if _laps is None or len(_laps) < 10:
+                            raise RuntimeError(f"Session data not published yet for {k}")
+                        ses = f_ses
+                    except RuntimeError:
+                        raise
+                    except Exception as exc:
+                        raise RuntimeError(f"Load incomplete for {k}: {exc}") from exc
                 except RuntimeError:
                     raise
                 except Exception as exc:
-                    raise RuntimeError(f"Load incomplete for {k}: {exc}") from exc
-            except RuntimeError:
-                raise
-            except Exception as exc:
-                logger.info("FastF1 direct load not available for %s R%s %s (%s). Using OpenF1/Jolpica adapter.", year, rnd, ident, exc)
+                    logger.info("FastF1 direct load not available for %s R%s %s (%s). Using OpenF1/Jolpica adapter.", year, rnd, ident, exc)
 
         if ses is None:
             ses = _build_session_from_sources(year, rnd, ident)
@@ -379,11 +384,13 @@ def get_session(year: int, rnd: int, ident: str = "R", telemetry: bool = False):
                 evicted_key, _ = _REG.popitem(last=False)
                 logger.info("Evicted session %s from LRU cache (max %d)", evicted_key, MAX_SESSIONS)
 
+        load_dur = time.perf_counter() - t_start
         logger.info(
-            "Published session %s R%s %s: %d laps, %d drivers",
+            "Published session %s R%s %s: %d laps, %d drivers (load took %.3fs)",
             year, rnd, ident,
             len(_laps),
             len(_results) if _results is not None else 0,
+            load_dur,
         )
         return ses
 

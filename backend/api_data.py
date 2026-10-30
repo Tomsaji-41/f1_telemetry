@@ -78,22 +78,60 @@ def std_envelope(*args, **kwargs) -> JSONResponse:
 # 1. SEASONS & SESSIONS & IDENTITY
 # =====================================================================
 @router.get("/api/identity")
-def get_identity(year: Optional[int] = Query(None)):
+def get_identity(year: Optional[int] = Query(None), round: Optional[int] = Query(None)):
     """
     Returns official driver codes, permanent numbers, unique driverIds,
-    team colors with WCAG 2.1 text contrast, and teammate stroke styling (Phase 2).
+    team colors with WCAG 2.1 text contrast, and teammate stroke styling (Phase 2 & C-5).
+    Accepts ?year=&round= for round-specific lineups and mid-season driver substitutions.
     """
     try:
         from backend import identity
     except ImportError:
         import identity
-    data = identity.get_season_identity(year)
+    data = identity.get_identity(year, round)
     return std_envelope(
         source=data.get("source", "Jolpica & OpenF1"),
         status=data.get("status", "ok"),
         year=data.get("year"),
+        round=data.get("round"),
         drivers=data.get("drivers", {}),
         teams=data.get("teams", {})
+    )
+
+@router.get("/api/coverage")
+def get_race_coverage_endpoint(year: Optional[int] = Query(None), round: Optional[int] = Query(None)):
+    """Returns per-dataset availability for the requested race in < 50 ms (Phase D)."""
+    if year is None:
+        latest = jolpica.get_latest_completed_session()
+        year = latest.get("year", datetime.date.today().year)
+    if round is None:
+        latest = jolpica.get_latest_completed_session()
+        round = latest.get("round", 1)
+
+    items = cache.get_race_coverage(year, round)
+    return std_envelope(
+        source="Coverage Registry",
+        status="ok",
+        year=year,
+        round=round,
+        coverage=items,
+        total_datasets=len(items)
+    )
+
+@router.get("/api/coverage/season")
+def get_season_coverage_endpoint(year: Optional[int] = Query(None)):
+    """Returns the entire season coverage matrix (Phase D)."""
+    if year is None:
+        latest = jolpica.get_latest_completed_session()
+        year = latest.get("year", datetime.date.today().year)
+
+    items = cache.get_race_coverage(year)
+    return std_envelope(
+        source="Coverage Registry",
+        status="ok",
+        year=year,
+        coverage=items,
+        total_records=len(items)
     )
 
 @router.get("/api/sessions/available")
@@ -331,6 +369,20 @@ def get_standings(
 # =====================================================================
 # 5. TEAMS (CONSTRUCTORS)
 # =====================================================================
+@router.get("/api/teams/cards")
+def get_teams_cards(year: Optional[int] = Query(None), round: Optional[int] = Query(None)):
+    """
+    Returns rich team cards for a specific Grand Prix round (Phase J).
+    Includes runtime-resolved logos, monogram fallback, championship details,
+    this round breakdown, drivers, reliability, and Wikidata profile.
+    """
+    try:
+        from backend import team_cards
+    except ImportError:
+        import team_cards
+    data = team_cards.get_team_cards(year, round)
+    return std_envelope(**data)
+
 @router.get("/api/teams")
 def get_teams(year: Optional[int] = Query(None)):
     """Returns every constructor for the given season with drivers and points."""
@@ -417,6 +469,19 @@ def get_team_profile(team_id: str):
 # =====================================================================
 # 6. DRIVERS
 # =====================================================================
+@router.get("/api/drivers/cards")
+def get_driver_cards(year: Optional[int] = Query(None), round: Optional[int] = Query(None)):
+    """
+    Returns rich driver cards for a specific Grand Prix round (Phase I).
+    Includes identity, round stats, season standings, recent form, teammate H2H, and career highlights.
+    """
+    try:
+        from backend import driver_cards
+    except ImportError:
+        import driver_cards
+    data = driver_cards.get_driver_cards(year, round)
+    return std_envelope(**data)
+
 @router.get("/api/drivers")
 def get_drivers(year: Optional[int] = Query(None)):
     """Returns all active drivers for a season with points, team, and headshot."""
@@ -570,47 +635,84 @@ def get_legends():
 
 @router.get("/api/eras")
 def get_eras():
-    """Returns historical F1 technical eras with champions calculated dynamically."""
-    eras_file = Path(__file__).resolve().parent.parent / "data" / "editorial" / "eras.json"
-    if not eras_file.exists():
-        return std_envelope(
-            source="Editorial",
-            status="not_available",
-            reason="Eras editorial metadata file missing."
-        )
-
+    """Returns historical F1 technical eras with champions calculated dynamically from runtime Jolpica seasons."""
     try:
-        eras_data = json.loads(eras_file.read_text(encoding="utf-8"))
-    except Exception as e:
-        return std_envelope(source="Editorial", status="error", reason=str(e))
+        # 1. Locate editorial eras configuration file
+        eras_file = Path(__file__).resolve().parent.parent / "data" / "editorial" / "eras.json"
+        if not eras_file.exists():
+            eras_file = Path("data") / "editorial" / "eras.json"
+        if not eras_file.exists():
+            return std_envelope(
+                source="Editorial",
+                status="not_available",
+                reason="Eras editorial configuration file missing.",
+                eras=[]
+            )
 
-    # Fetch champions for dynamic association
-    current_year = datetime.date.today().year
-    raw = jolpica.fetch_champions(1950, current_year)
-    all_champions = raw.get("champions", []) if raw.get("status") == "ok" else []
+        try:
+            eras_data = json.loads(eras_file.read_text(encoding="utf-8"))
+        except Exception as e:
+            return std_envelope(source="Editorial", status="error", reason=str(e), eras=[])
 
-    for era in eras_data:
-        from_y = era.get("from", 1950)
-        to_y = era.get("to") or current_year
-        era_champs = [c for c in all_champions if from_y <= int(c.get("year", 0)) <= to_y]
+        # 2. Build season range dynamically from runtime Jolpica /seasons list (Phase P1 / P5)
+        seasons = jolpica.fetch_all_seasons()
+        all_years = [s["year"] for s in seasons if isinstance(s, dict) and s.get("year")]
+        min_year = min(all_years) if all_years else 1950
+        max_year = max(all_years) if all_years else datetime.date.today().year
 
-        # Count titles in this era
-        title_tally: Dict[str, int] = {}
-        for c in era_champs:
-            d = c.get("driver", "")
-            title_tally[d] = title_tally.get(d, 0) + 1
+        # 3. Fetch champions dynamically
+        raw = jolpica.fetch_champions(min_year, max_year)
+        all_champions = raw.get("champions", []) if isinstance(raw, dict) and raw.get("status") == "ok" else []
 
-        era["champions_count"] = len(era_champs)
-        era["dominant_drivers"] = [
-            {"driver": d, "titles_in_era": cnt}
-            for d, cnt in sorted(title_tally.items(), key=lambda x: x[1], reverse=True)[:3]
-        ]
+        # 4. Associate runtime champions with era definitions
+        for era in eras_data:
+            try:
+                from_y = int(era.get("from", min_year))
+            except (ValueError, TypeError):
+                from_y = min_year
 
-    return std_envelope(
-        source="Editorial & Jolpica",
-        status="ok",
-        eras=eras_data
-    )
+            try:
+                to_val = era.get("to")
+                to_y = int(to_val) if to_val is not None else max_year
+            except (ValueError, TypeError):
+                to_y = max_year
+
+            # Filter champions in era range safely
+            era_champs = []
+            for c in all_champions:
+                try:
+                    c_yr = int(c.get("year", 0))
+                    if from_y <= c_yr <= to_y:
+                        era_champs.append(c)
+                except (ValueError, TypeError):
+                    continue
+
+            # Tally dominant drivers only when driver name is non-empty
+            title_tally: Dict[str, int] = {}
+            for c in era_champs:
+                d = c.get("driver") or c.get("driver_champion")
+                if d and d not in ("Unknown", "TBD"):
+                    title_tally[d] = title_tally.get(d, 0) + 1
+
+            era["champions_count"] = len(era_champs)
+            era["dominant_drivers"] = [
+                {"driver": d, "titles_in_era": cnt}
+                for d, cnt in sorted(title_tally.items(), key=lambda x: x[1], reverse=True)[:3]
+            ]
+
+        return std_envelope(
+            source="Editorial & Jolpica",
+            status="ok",
+            eras=eras_data
+        )
+    except Exception as exc:
+        logger.exception("Error computing eras: %s", exc)
+        return std_envelope(
+            source="Editorial & Jolpica",
+            status="not_available",
+            reason=f"Failed to load era data: {exc}",
+            eras=[]
+        )
 
 
 # =====================================================================

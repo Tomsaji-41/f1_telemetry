@@ -389,6 +389,31 @@ def get_driver_image(driver: str, year: Optional[int] = None) -> Dict[str, Any]:
     """
     return openf1_src.fetch_driver_image(driver, year=year)
 
+def get_circuit_geometry(circuit_or_gp: str, year: Optional[int] = None) -> Dict[str, Any]:
+    """
+    Get 2D/3D track centerline coordinates, corners, rotation, and track length for a circuit.
+    Telemetry coordinates available from 2018 onward via FastF1/MultiViewer.
+    """
+    circuits_data = jolpica.fetch_circuits()
+    query = circuit_or_gp.strip().lower()
+    target_id = None
+    for c in circuits_data:
+        c_id = c.get("circuitId", "").lower()
+        c_name = c.get("circuitName", "").lower()
+        if query in [c_id, c_name]:
+            target_id = c.get("circuitId")
+            break
+    if not target_id:
+        aliases = _get_circuit_aliases()
+        target_id = aliases.get(query)
+    if not target_id:
+        target_id = query
+    try:
+        from backend import circuits
+    except ImportError:
+        import circuits
+    return circuits.get_circuit_geometry(target_id, year=year)
+
 TOOL_REGISTRY = [
     get_season_schedule,
     get_race_result,
@@ -405,6 +430,7 @@ TOOL_REGISTRY = [
     get_race_control_events,
     get_weather,
     get_circuit_info,
+    get_circuit_geometry,
     get_driver_profile,
     get_team_history,
     get_live_session,

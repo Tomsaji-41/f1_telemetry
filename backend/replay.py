@@ -46,17 +46,10 @@ def _format_time_delta(td: Any) -> str:
     return f"{secs:.3f}"
 
 
-def _sanitize_for_json(obj: Any) -> Any:
-    """Recursively replaces NaN and inf with None."""
-    if isinstance(obj, dict):
-        return {k: _sanitize_for_json(v) for k, v in obj.items()}
-    elif isinstance(obj, list):
-        return [_sanitize_for_json(v) for v in obj]
-    elif isinstance(obj, float):
-        if np.isnan(obj) or np.isinf(obj):
-            return None
-        return obj
-    return obj
+try:
+    from backend.sanitizer import sanitize_for_json
+except ImportError:
+    from sanitizer import sanitize_for_json
 
 
 def get_session_replay_bundle(year: Optional[int] = None, rnd: Optional[int] = None) -> Dict[str, Any]:
@@ -362,7 +355,7 @@ def get_session_replay_bundle(year: Optional[int] = None, rnd: Optional[int] = N
         }
     }
 
-    bundle = _sanitize_for_json(bundle)
+    bundle = sanitize_for_json(bundle)
 
     try:
         ttl = 60 if is_partial else cache.TTL_PAST_SEASON

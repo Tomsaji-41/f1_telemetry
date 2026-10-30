@@ -323,14 +323,14 @@ def build_telemetry_compare(
         session_used = "Race"
         weekend_note = None
 
-        # Step 2: If missing in current session, check other sessions of the weekend (Q, FP2, FP1, FP3, S)
+        # Step 2: If missing in current session, check Qualifying (or peek already-cached practice sessions)
         if car1 is None or car2 is None:
             alt_sessions = ["Q", "FP2", "FP1", "FP3", "S", "SQ"]
             for alt in alt_sessions:
                 try:
                     alt_ses = loader.peek(year, rnd, alt, telemetry=True)
-                    if alt_ses is None:
-                        # Only try loading if FastF1 is enabled
+                    # Only attempt cold load for Qualifying to prevent multi-session cascading timeouts
+                    if alt_ses is None and alt == "Q":
                         alt_ses = loader.get_session(year, rnd, alt, telemetry=True)
                     if alt_ses is not None and getattr(alt_ses, "laps", None) is not None:
                         alt_l1 = _get_driver_laps(alt_ses.laps, driver1)

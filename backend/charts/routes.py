@@ -12,6 +12,7 @@ Jolpica/pit routes call functions directly (no session needed).
 """
 import json
 import logging
+import time
 import datetime as _dt
 from typing import List, Optional
 
@@ -99,7 +100,10 @@ async def run_chart(name: str, year: int, rnd: int, fn, telemetry: bool = False,
     ses = loader.peek(year, rnd, "R", telemetry=telemetry)
     if ses is not None:
         try:
+            t0 = time.perf_counter()
             out = await run_in_threadpool(fn, ses, **kw)
+            proc_dur = time.perf_counter() - t0
+            logger.info("[chart:%s] Warm session in-memory hit for %s R%s (process=%.3fs)", name, year, rnd, proc_dur)
             # Only cache successful results — never cache transient errors
             if out.get("status") == "ok" or ("series" in out or "points" in out or "stints" in out or "stops" in out or "drivers" in out):
                 _cache.set_json(key, out, _ttl_for(year))
@@ -110,8 +114,20 @@ async def run_chart(name: str, year: int, rnd: int, fn, telemetry: bool = False,
 
     # Kick off background load
     def _load_and_compute():
+        t0 = time.perf_counter()
         ses = loader.get_session(year, rnd, "R", telemetry=telemetry)
+        t_load = time.perf_counter() - t0
+
+        t1 = time.perf_counter()
         result = fn(ses, **kw)
+        t_proc = time.perf_counter() - t1
+        t_total = time.perf_counter() - t0
+
+        logger.info(
+            "[chart:%s] Cold load timings for %s R%s: load=%.3fs, process=%.3fs, total=%.3fs",
+            name, year, rnd, t_load, t_proc, t_total
+        )
+
         # Only cache successful/data results — not error/empty responses
         cacheable_statuses = {"ok"}
         has_data = any(k in result for k in ("series", "points", "stints", "stops", "drivers", "rows", "x"))
