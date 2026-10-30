@@ -14,6 +14,7 @@ cache.sqlite
 *.sqlite
 data/
 logs/
+*.log
 .DS_Store
 .vscode/
 
@@ -23,3 +24,5 @@ logs/
 desktop.ini
 *.lnk
 *.bak
+scratch/
+audit/
