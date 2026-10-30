@@ -56,3 +56,39 @@ export function getAccessibleTextColor(bgHex: string): "#000000" | "#ffffff" {
   const contrastWithBlack = (bgLum + 0.05) / (0 + 0.05);
   return contrastWithBlack >= contrastWithWhite ? "#000000" : "#ffffff";
 }
+
+/**
+ * Lightens a hex colour by moving RGB channels towards 255 by given factor (0 to 1).
+ */
+export function lightenHex(hex: string, factor: number = 0.35): string {
+  if (!hex || typeof hex !== "string" || !hex.startsWith("#")) return hex;
+  const [r, g, b] = parseHex(hex);
+  const rNew = Math.min(255, Math.max(0, Math.round(r + (255 - r) * factor)));
+  const gNew = Math.min(255, Math.max(0, Math.round(g + (255 - g) * factor)));
+  const bNew = Math.min(255, Math.max(0, Math.round(b + (255 - b) * factor)));
+  const toHex = (n: number) => n.toString(16).padStart(2, "0");
+  return `#${toHex(rNew)}${toHex(gNew)}${toHex(bNew)}`.toUpperCase();
+}
+
+/**
+ * Ensures that a hex colour meets at least minRatio:1 contrast against a given dark background
+ * (defaulting to the chart background #0B0F14). Lightens iteratively until compliant.
+ */
+export function ensureContrast(
+  hex: string,
+  bgHex: string = "#0B0F14",
+  minRatio: number = 3.0
+): string {
+  if (!hex || typeof hex !== "string" || !hex.startsWith("#")) {
+    return hex || "var(--accent)";
+  }
+  let currentHex = hex;
+  let ratio = getContrastRatio(currentHex, bgHex);
+  let attempts = 0;
+  while (ratio < minRatio && attempts < 10) {
+    currentHex = lightenHex(currentHex, 0.2);
+    ratio = getContrastRatio(currentHex, bgHex);
+    attempts++;
+  }
+  return currentHex;
+}

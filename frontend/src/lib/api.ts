@@ -64,29 +64,63 @@ export async function checkHealth(): Promise<HealthResponse> {
   return fetchApi<HealthResponse>("/api/health");
 }
 
-// ── Chart-specific fetcher and helpers ────────────────────────────────────
+// ── Chart-specific fetcher and helpers with in-flight deduplication & client SWR ────
 
 export class ApiError extends Error {
   url: string;
   statusCode: number;
-  constructor(url: string, statusCode: number) {
-    super(`${statusCode} ${url}`);
+  constructor(url: string, statusCode: number, message?: string) {
+    super(message || `API error ${statusCode} at ${url}`);
     this.url = url;
     this.statusCode = statusCode;
     this.name = "ApiError";
   }
 }
 
+// In-flight request deduplication (prevents React StrictMode double-fetch)
+const _IN_FLIGHT_REQUESTS = new Map<string, Promise<any>>();
+const _CLIENT_CACHE = new Map<string, { data: any; timestamp: number }>();
+
 /**
- * Minimal fetcher for SWR / React Query — returns JSON or throws ApiError.
+ * High-performance fetcher with in-flight request de-duplication (P4)
+ * and micro-caching to eliminate duplicate requests and StrictMode re-fetches.
  */
-export async function fetcher<T = any>(url: string): Promise<T> {
-  const r = await fetch(url, { headers: { Accept: "application/json" } });
-  if (!r.ok) {
-    console.error("API error", r.status, url);
-    throw new ApiError(url, r.status);
+export async function fetcher<T = any>(url: string, bypassCache = false): Promise<T> {
+  const now = Date.now();
+
+  // Check client micro-cache (valid for 4 seconds to deduplicate rapid consecutive mounts)
+  if (!bypassCache) {
+    const cached = _CLIENT_CACHE.get(url);
+    if (cached && now - cached.timestamp < 4000) {
+      return cached.data as T;
+    }
   }
-  return r.json();
+
+  // Check if identical request is already in-flight
+  if (_IN_FLIGHT_REQUESTS.has(url)) {
+    return _IN_FLIGHT_REQUESTS.get(url) as Promise<T>;
+  }
+
+  const reqPromise = (async () => {
+    try {
+      const r = await fetch(url, { headers: { Accept: "application/json" } });
+      if (!r.ok) {
+        console.error("API error", r.status, url);
+        throw new ApiError(url, r.status);
+      }
+      const data = await r.json();
+      _CLIENT_CACHE.set(url, { data, timestamp: Date.now() });
+      return data;
+    } finally {
+      // Clean up in-flight tracker shortly after resolution
+      setTimeout(() => {
+        _IN_FLIGHT_REQUESTS.delete(url);
+      }, 50);
+    }
+  })();
+
+  _IN_FLIGHT_REQUESTS.set(url, reqPromise);
+  return reqPromise;
 }
 
 /**

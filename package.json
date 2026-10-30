@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "cmd /c run_all.bat",
-    "dev:backend": "cmd /c .venv\\Scripts\\python.exe -m uvicorn backend.main:app --port 8000 --reload",
+    "dev:backend": "cmd /c .venv\\Scripts\\python.exe -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload --reload-dir backend --reload-exclude \"f1_cache\" --reload-exclude \"*.sqlite*\" --reload-exclude \"data\" --reload-exclude \"logs\"",
     "dev:frontend": "npm --prefix frontend run dev",
     "test": "cmd /c .venv\\Scripts\\python.exe -m pytest"
   }

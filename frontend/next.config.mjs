@@ -12,6 +12,9 @@ const cspHeader = `
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  experimental: {
+    proxyTimeout: 120_000,
+  },
   eslint: {
     ignoreDuringBuilds: true,
   },

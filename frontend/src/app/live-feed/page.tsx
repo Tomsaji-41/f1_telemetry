@@ -152,24 +152,31 @@ function LiveFeedContent(): React.JSX.Element {
     };
   }, [year, round, sessionParam]);
 
+  const totalLaps = bundle?.total_laps || 1;
+  const isPartial = Boolean(bundle?.is_partial || bundle?.status === "partial");
+  const maxAvailableLap = useMemo(() => {
+    if (!bundle) return 1;
+    if (bundle.loaded_laps && bundle.loaded_laps > 0) return bundle.loaded_laps;
+    const lapKeys = Object.keys(bundle.laps || {}).map(Number).filter((n) => !isNaN(n));
+    return lapKeys.length > 0 ? Math.max(...lapKeys) : totalLaps;
+  }, [bundle, totalLaps]);
+
   // Playback loop in memory (zero network requests)
   useEffect(() => {
     if (!isPlaying || isLive || !bundle) return;
-    const total = bundle.total_laps || 1;
+    const maxLap = isPartial ? maxAvailableLap : totalLaps;
     const interval = setInterval(() => {
       setCurrentLap((prev) => {
-        if (prev >= total) {
+        if (prev >= maxLap) {
           setIsPlaying(false);
-          return total;
+          return maxLap;
         }
         return prev + 1;
       });
     }, 1200);
     return () => clearInterval(interval);
-  }, [isPlaying, isLive, bundle]);
+  }, [isPlaying, isLive, bundle, isPartial, maxAvailableLap, totalLaps]);
 
-  const totalLaps = bundle?.total_laps || 1;
-  const isPartial = Boolean(bundle?.is_partial || bundle?.status === "partial");
   const currentLapData = useMemo(() => {
     if (!bundle || !bundle.laps) return null;
     return bundle.laps[currentLap] || bundle.laps[String(currentLap)] || null;
@@ -266,7 +273,11 @@ function LiveFeedContent(): React.JSX.Element {
               )}
             </div>
             <h1 className="text-[24px] font-semibold text-[var(--text)] tracking-tight mt-1">
-              {isLive ? "OpenF1 Live Timing Feed" : `Session Replay: Lap ${currentLap} of ${totalLaps}`}
+              {isLive
+                ? "OpenF1 Live Timing Feed"
+                : isPartial
+                ? `Session Replay: Lap ${currentLap} of ${maxAvailableLap} (Partial • Official: ${totalLaps} Laps)`
+                : `Session Replay: Lap ${currentLap} of ${totalLaps}`}
             </h1>
           </div>
 
@@ -295,11 +306,11 @@ function LiveFeedContent(): React.JSX.Element {
               <button
                 type="button"
                 onClick={() => {
-                  setCurrentLap(totalLaps);
+                  setCurrentLap(maxAvailableLap);
                   setIsPlaying(false);
                 }}
                 className="p-2 border border-[var(--border)] rounded bg-[var(--raised)] text-[var(--text-2)] hover:text-[var(--text)] transition-colors"
-                title="Jump to Finish"
+                title="Jump to Latest Recorded Lap"
               >
                 <SkipForward className="w-4 h-4" />
               </button>
@@ -313,14 +324,14 @@ function LiveFeedContent(): React.JSX.Element {
             <div className="flex justify-between items-center text-[11px] font-mono text-[var(--text-3)] mb-1">
               <span>Lap 1</span>
               <span className="font-bold text-[var(--accent)]">
-                Selected: Lap {currentLap} ({Math.round((currentLap / totalLaps) * 100)}%)
+                Selected: Lap {currentLap} ({Math.round((currentLap / maxAvailableLap) * 100)}%)
               </span>
-              <span>Lap {totalLaps} (Finish)</span>
+              <span>Lap {maxAvailableLap} {isPartial ? `(Latest Recorded — Official: ${totalLaps})` : "(Finish)"}</span>
             </div>
             <input
               type="range"
               min={1}
-              max={totalLaps}
+              max={maxAvailableLap}
               value={currentLap}
               onChange={(e) => {
                 setCurrentLap(parseInt(e.target.value, 10));
@@ -388,7 +399,11 @@ function LiveFeedContent(): React.JSX.Element {
         <section>
           <Panel
             title="Session Classification"
-            subtitle={`Verified driver intervals and tyre stint pace at Lap ${currentLap} of ${totalLaps}`}
+            subtitle={
+              isPartial
+                ? `Driver intervals at recorded Lap ${currentLap} of ${maxAvailableLap} (Official race distance: ${totalLaps} laps)`
+                : `Verified driver intervals and tyre stint pace at Lap ${currentLap} of ${totalLaps}`
+            }
           >
             <div className="overflow-x-auto">
               <table className="w-full text-xs font-mono">

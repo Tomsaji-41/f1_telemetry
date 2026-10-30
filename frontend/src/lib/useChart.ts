@@ -28,7 +28,7 @@ export function useChart<T extends ChartData = ChartData>(
     keepPreviousData: true,
     refreshInterval: (latestData: T | undefined) => {
       if (timedOut) return 0;
-      if (latestData?.status === "preparing") {
+      if (latestData?.status === "preparing" || latestData?.status === "loading") {
         if (!preparingStartRef.current) {
           preparingStartRef.current = Date.now();
         } else if (Date.now() - preparingStartRef.current > 45000) {

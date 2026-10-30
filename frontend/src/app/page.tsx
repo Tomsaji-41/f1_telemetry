@@ -8,6 +8,7 @@ import { RaceStoryScrollytelling } from "@/components/dashboard/RaceStoryScrolly
 import { TyreStintGantt } from "@/components/charts/TyreStintGantt";
 import { ChampionshipProgressionChart } from "@/components/charts/ChampionshipProgressionChart";
 import { GridVsFinishChart } from "@/components/charts/GridVsFinishChart";
+import { CircuitCompactPanel } from "@/features/circuits/CircuitCompactPanel";
 import { useInspector } from "@/components/layouts/inspector-drawer";
 import { fetcher } from "@/lib/api";
 import en from "@/content/en.json";
@@ -51,12 +52,9 @@ function DashboardContent(): React.JSX.Element {
           }
         }
 
-        // 2. Fetch race classification and chart endpoints in parallel
-        const [raceRes, posRes, stintsRes, progRes, gridRes, rcRes] = await Promise.all([
+        // 2. Critical path: fetch race classification & grid comparison first
+        const [raceRes, gridRes, rcRes] = await Promise.all([
           fetcher(`/api/race?year=${targetYear}&round=${targetRound}`).catch(() => null),
-          fetcher(`/api/charts/position-by-lap?year=${targetYear}&round=${targetRound}`).catch(() => null),
-          fetcher(`/api/charts/stints?year=${targetYear}&round=${targetRound}`).catch(() => null),
-          fetcher(`/api/charts/championship-progression?year=${targetYear}`).catch(() => null),
           fetcher(`/api/charts/grid-vs-finish?year=${targetYear}&round=${targetRound}`).catch(() => null),
           fetcher(`/api/race-control?year=${targetYear}&round=${targetRound}`).catch(() => null),
         ]);
@@ -69,12 +67,22 @@ function DashboardContent(): React.JSX.Element {
           setError(raceRes.reason);
         }
 
-        setPositionData(posRes);
-        setStintData(stintsRes);
-        setProgressionData(progRes);
         setGridData(gridRes);
         setRaceControlData(rcRes?.messages || []);
-        setLoading(false);
+        setLoading(false); // Render dashboard immediately without waiting for heavy telemetry
+
+        // 3. Stagger below-the-fold charts progressively so the event-loop / FastF1 loads do not contend
+        fetcher(`/api/charts/position-by-lap?year=${targetYear}&round=${targetRound}`)
+          .then((res) => mounted && setPositionData(res))
+          .catch(() => null);
+
+        fetcher(`/api/charts/stints?year=${targetYear}&round=${targetRound}`)
+          .then((res) => mounted && setStintData(res))
+          .catch(() => null);
+
+        fetcher(`/api/charts/championship-progression?year=${targetYear}`)
+          .then((res) => mounted && setProgressionData(res))
+          .catch(() => null);
       } catch (err: any) {
         if (!mounted) return;
         setError(err.message || "Failed to load Grand Prix telemetry data.");
@@ -189,6 +197,15 @@ function DashboardContent(): React.JSX.Element {
             deltaType="positive"
           />
         </div>
+      </section>
+
+      {/* Circuit Preview Panel (Phase K) */}
+      <section>
+        <CircuitCompactPanel
+          circuitId={raceData.circuit_id || raceData.circuit}
+          year={raceData.year}
+          round={raceData.round}
+        />
       </section>
 
       {/* Race Control & Pit Timeline + Position Chart */}

@@ -31,28 +31,34 @@ export default function LegendsPage(): React.JSX.Element {
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let mounted = true;
-    Promise.all([
-      fetcher<{ legends: Legend[] }>("/api/legends").catch(() => ({ legends: [] })),
-      fetcher<{ eras: Era[] }>("/api/eras").catch(() => ({ eras: [] }))
-    ])
-      .then(([legRes, erasRes]) => {
-        if (!mounted) return;
-        setLegends(legRes.legends || []);
-        setEras(erasRes.eras || []);
-        setLoading(false);
-      })
-      .catch((err) => {
-        if (!mounted) return;
-        setError(err.message || "Failed to load legends.");
-        setLoading(false);
-      });
+  const loadData = React.useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const [legRes, erasRes] = await Promise.all([
+        fetcher<{ status?: string; reason?: string; legends?: Legend[] }>("/api/legends", true),
+        fetcher<{ status?: string; reason?: string; eras?: Era[] }>("/api/eras", true),
+      ]);
 
-    return () => {
-      mounted = false;
-    };
+      if (legRes && legRes.status === "error") {
+        throw new Error(legRes.reason || "Failed to load legends data.");
+      }
+      if (erasRes && erasRes.status === "error") {
+        throw new Error(erasRes.reason || "Failed to load historical eras.");
+      }
+
+      setLegends(legRes?.legends || []);
+      setEras(erasRes?.eras || []);
+    } catch (err: any) {
+      setError(err?.message || "Failed to load F1 legends and technical eras.");
+    } finally {
+      setLoading(false);
+    }
   }, []);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   if (loading) {
     return (
@@ -75,10 +81,10 @@ export default function LegendsPage(): React.JSX.Element {
   if (error) {
     return (
       <ErrorState
-        title="Failed to load F1 Legends"
+        title="Failed to load F1 Legends & Technical Eras"
         message={error}
         source="Jolpica Historical Archives"
-        onRetry={() => window.location.reload()}
+        onRetry={loadData}
       />
     );
   }

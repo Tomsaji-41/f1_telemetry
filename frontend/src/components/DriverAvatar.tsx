@@ -50,6 +50,10 @@ export function DriverAvatar({
     <img
       src={headshotUrl}
       alt={name}
+      loading="lazy"
+      decoding="async"
+      width={size}
+      height={size}
       data-testid="driver-avatar-img"
       className={`rounded-full object-cover border border-[var(--border)] bg-[var(--surface-2)] shrink-0 ${className}`}
       style={{
