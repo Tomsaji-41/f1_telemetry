@@ -4,6 +4,7 @@ import React, { useMemo } from "react";
 import { scaleLinear } from "d3-scale";
 import { ChartShell } from "./ChartShell";
 import { useInspector } from "../layouts/inspector-drawer";
+import { useIdentity } from "@/lib/useIdentity";
 
 interface StandingProgressionItem {
   name: string;
@@ -27,7 +28,8 @@ export function ChampionshipProgressionChart({
   loading = false,
 }: ChampionshipProgressionProps) {
   const { inspectItem } = useInspector();
-  const rawSeries = data?.series || [];
+  const { getDriver, getTeam, getDriverColor } = useIdentity();
+  const rawSeries = (data?.series || (data as any)?.standings || []) as StandingProgressionItem[];
 
   const width = 800;
   const height = 320;
@@ -36,7 +38,8 @@ export function ChampionshipProgressionChart({
   const maxPoints = useMemo(() => {
     let m = 100;
     rawSeries.forEach((s) => {
-      if (s.points > m) m = s.points;
+      const pts = Number(s.points) || 0;
+      if (pts > m) m = pts;
     });
     return Math.ceil(m / 50) * 50;
   }, [rawSeries]);
@@ -56,14 +59,26 @@ export function ChampionshipProgressionChart({
   const csvData = useMemo(() => {
     let csv = "Driver,Code,Points,Position\n";
     rawSeries.forEach((s) => {
-      csv += `${s.name},${s.code},${s.points},${s.position}\n`;
+      const code = s.code || (s as any).id || "DRV";
+      const drv = getDriver(code);
+      const team = getTeam(code);
+      const name = drv?.name || team?.name || s.name || code;
+      const pts = Number(s.points) || 0;
+      csv += `${name},${code},${pts},${s.position ?? ""}\n`;
     });
     return csv;
-  }, [rawSeries]);
+  }, [rawSeries, getDriver, getTeam]);
 
   const tableRows = useMemo(() => {
-    return rawSeries.map((s) => [s.name, s.code, `${s.points} pts`, `P${s.position}`]);
-  }, [rawSeries]);
+    return rawSeries.map((s) => {
+      const code = s.code || (s as any).id || "DRV";
+      const drv = getDriver(code);
+      const team = getTeam(code);
+      const name = drv?.name || team?.name || s.name || code;
+      const pts = Number(s.points) || 0;
+      return [name, code, `${pts} pts`, `P${s.position ?? "-"}`];
+    });
+  }, [rawSeries, getDriver, getTeam]);
 
   return (
     <ChartShell
@@ -81,50 +96,63 @@ export function ChampionshipProgressionChart({
       <div className="w-full overflow-x-auto">
         <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto select-none">
           {/* Y-axis Grid */}
-          {[0, maxPoints * 0.25, maxPoints * 0.5, maxPoints * 0.75, maxPoints].map((pts) => (
-            <g key={pts}>
-              <line
-                x1={margin.left}
-                y1={yScale(pts)}
-                x2={width - margin.right}
-                y2={yScale(pts)}
-                stroke="var(--border)"
-                strokeWidth={0.8}
-                strokeDasharray="2 2"
-              />
-              <text
-                x={margin.left - 8}
-                y={yScale(pts) + 3}
-                fontSize={10}
-                fill="var(--text-3)"
-                textAnchor="end"
-                fontFamily="var(--font-num)"
-              >
-                {Math.round(pts)}
-              </text>
-            </g>
-          ))}
+          {[0, maxPoints * 0.25, maxPoints * 0.5, maxPoints * 0.75, maxPoints].map((pts) => {
+            const y = yScale(pts);
+            if (!Number.isFinite(y)) return null;
+            return (
+              <g key={pts}>
+                <line
+                  x1={margin.left}
+                  y1={y}
+                  x2={width - margin.right}
+                  y2={y}
+                  stroke="var(--border)"
+                  strokeWidth={0.8}
+                  strokeDasharray="2 2"
+                />
+                <text
+                  x={margin.left - 8}
+                  y={y + 3}
+                  fontSize={10}
+                  fill="var(--text-3)"
+                  textAnchor="end"
+                  fontFamily="var(--font-num)"
+                >
+                  {Math.round(pts)}
+                </text>
+              </g>
+            );
+          })}
 
           {/* Points Bars for Top Competitors */}
           {rawSeries.map((s, idx) => {
+            const code = s.code || (s as any).id || `D${idx + 1}`;
+            const drv = getDriver(code);
+            const team = getTeam(code);
+            const name = drv?.name || team?.name || s.name || code;
+            const teamColor = drv?.teamColor || team?.teamColor || getDriverColor(code) || "var(--accent)";
+            const pts = Number(s.points) || 0;
             const x = xScale(idx + 0.5);
-            const y = yScale(s.points);
+            const y = yScale(pts);
+            if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
             const barHeight = Math.max(2, height - margin.bottom - y);
 
             return (
               <g
-                key={s.code}
+                key={code}
                 className="group cursor-pointer"
                 onClick={() => {
                   inspectItem({
                     type: "driver",
-                    title: s.name,
-                    subtitle: `Championship P${s.position}`,
+                    title: name,
+                    subtitle: `Championship P${s.position ?? idx + 1}`,
                     details: {
-                      Championship: `P${s.position}`,
-                      "Total Points": `${s.points} pts`,
+                      Driver: name,
+                      Team: drv?.team || team?.name || "Unknown",
+                      Championship: `P${s.position ?? idx + 1}`,
+                      "Total Points": `${pts} pts`,
                     },
-                    queryContext: `Summarize ${s.name}'s championship campaign`,
+                    queryContext: `Summarize ${name}'s championship campaign`,
                   });
                 }}
               >
@@ -134,7 +162,7 @@ export function ChampionshipProgressionChart({
                   y={y}
                   width={28}
                   height={barHeight}
-                  fill={idx === 0 ? "var(--d2)" : "var(--accent)"}
+                  fill={teamColor}
                   rx={2}
                   className="hover:opacity-85 transition-opacity"
                 />
@@ -148,7 +176,7 @@ export function ChampionshipProgressionChart({
                   fontFamily="var(--font-num)"
                   fontWeight="600"
                 >
-                  {s.points}
+                  {pts}
                 </text>
                 {/* Code label */}
                 <text
@@ -160,7 +188,7 @@ export function ChampionshipProgressionChart({
                   fontFamily="var(--font-num)"
                   fontWeight="bold"
                 >
-                  {s.code}
+                  {code}
                 </text>
               </g>
             );

@@ -3,10 +3,10 @@ import logging
 from typing import Dict, Any, List, Optional, Union
 
 try:
-    from backend import resolver
+    from backend import resolver, cache
     from backend.sources import jolpica, fastf1_src, openf1_src
 except ImportError:
-    import resolver
+    import resolver, cache
     from sources import jolpica, fastf1_src, openf1_src
 
 logger = logging.getLogger("tools")
@@ -200,6 +200,65 @@ def get_weather(year: int, grand_prix: Union[str, int], session: str = "R") -> D
         return resolved
     return fastf1_src.fetch_weather(year, resolved["round"], session_type=session)
 
+def _get_circuit_aliases() -> Dict[str, str]:
+    """
+    Build GP and circuit aliases dynamically from Jolpica circuits and season schedules.
+    Cached for 30 days (cache.TTL_PAST_SEASON). No hardcoded alias dictionary.
+    """
+    cached = cache.get_json("dynamic_circuit_aliases_v1")
+    if cached and isinstance(cached, dict):
+        return cached
+
+    circuits = jolpica.fetch_circuits()
+    alias_map: Dict[str, str] = {}
+    for c in circuits:
+        cid = c.get("circuitId", "")
+        if not cid:
+            continue
+        cid_lower = cid.lower()
+        cname = c.get("circuitName", "").lower()
+        loc = c.get("Location", {}).get("locality", "").lower()
+        country = c.get("Location", {}).get("country", "").lower()
+
+        alias_map[cid_lower] = cid
+        alias_map[cname] = cid
+        if loc:
+            alias_map[loc] = cid
+        if country:
+            alias_map[country] = cid
+
+        # Strip common circuit noise words
+        clean = cname
+        for w in ["circuit", "autodromo", "autodrom", "international", "street", "de", "the", "di", "del"]:
+            clean = clean.replace(w, " ")
+        clean = " ".join(clean.split())
+        if clean and len(clean) > 2:
+            alias_map[clean] = cid
+
+        # Acronym e.g. "circuit of the americas" -> "cota"
+        words = [w for w in cname.replace("-", " ").split() if w not in ["and", "or", "the", "of"]]
+        if len(words) >= 3:
+            acronym = "".join(w[0] for w in words)
+            alias_map[acronym] = cid
+
+    # Scan schedules for recent and historical seasons to map GP names to circuit_id
+    current_year = datetime.date.today().year
+    for y in range(current_year, current_year - 6, -1):
+        sched = jolpica.fetch_schedule(y)
+        for r in sched.get("schedule", []):
+            r_cid = r.get("circuit_id")
+            gp = r.get("grand_prix", "").lower()
+            if r_cid and gp:
+                alias_map[gp] = r_cid
+                base = gp.replace("grand prix", "").replace("gp", "").strip()
+                if base:
+                    alias_map[base] = r_cid
+                    alias_map[f"{base} gp"] = r_cid
+                    alias_map[f"{base} grand prix"] = r_cid
+
+    cache.set_json("dynamic_circuit_aliases_v1", alias_map, cache.TTL_PAST_SEASON)
+    return alias_map
+
 def get_circuit_info(circuit_or_gp: str) -> Dict[str, Any]:
     """
     Get circuit metadata including circuit name, locality, country, coordinates, first GP year, and lap record.
@@ -207,60 +266,28 @@ def get_circuit_info(circuit_or_gp: str) -> Dict[str, Any]:
     """
     circuits = jolpica.fetch_circuits()
     query = circuit_or_gp.strip().lower()
-    
+
     target_id = None
     for c in circuits:
         c_id = c.get("circuitId", "").lower()
         c_name = c.get("circuitName", "").lower()
         loc = c.get("Location", {}).get("locality", "").lower()
         country = c.get("Location", {}).get("country", "").lower()
-        if query in [c_id, c_name, loc, country] or query in c_name:
+        if query in [c_id, c_name, loc, country] or query == c_name:
             target_id = c.get("circuitId")
             break
-            
+
     if not target_id:
-        # Check aliases
-        aliases = {
-            "spa": "spa",
-            "belgian": "spa",
-            "belgian grand prix": "spa",
-            "belgian gp": "spa",
-            "monza": "monza",
-            "italian": "monza",
-            "italian grand prix": "monza",
-            "silverstone": "silverstone",
-            "british": "silverstone",
-            "british grand prix": "silverstone",
-            "interlagos": "interlagos",
-            "brazilian": "interlagos",
-            "são paulo": "interlagos",
-            "suzuka": "suzuka",
-            "japanese": "suzuka",
-            "bahrain": "bahrain",
-            "sakhir": "bahrain",
-            "melbourne": "albert_park",
-            "albert park": "albert_park",
-            "australian": "albert_park",
-            "monaco": "monaco",
-            "zandvoort": "zandvoort",
-            "dutch": "zandvoort",
-            "austin": "americas",
-            "cota": "americas",
-            "united states": "americas",
-            "hungaroring": "hungaroring",
-            "hungarian": "hungaroring",
-            "red bull ring": "red_bull_ring",
-            "spielberg": "red_bull_ring",
-            "austrian": "red_bull_ring",
-            "catalunya": "catalunya",
-            "barcelona": "catalunya",
-            "spanish": "catalunya",
-            "villeneuve": "villeneuve",
-            "montreal": "villeneuve",
-            "canadian": "villeneuve",
-        }
+        aliases = _get_circuit_aliases()
         target_id = aliases.get(query)
-        
+
+    if not target_id:
+        # Partial match fallback against aliases
+        for k, v in _get_circuit_aliases().items():
+            if query in k or k in query:
+                target_id = v
+                break
+
     if not target_id:
         return {
             "status": "not_available",
@@ -268,7 +295,7 @@ def get_circuit_info(circuit_or_gp: str) -> Dict[str, Any]:
             "source": "Jolpica",
             "coverage_note": "Circuits database from 1950 to present."
         }
-        
+
     return jolpica.fetch_circuit_info(target_id)
 
 def get_driver_strategy(year: int, grand_prix: Union[str, int], driver: str) -> Dict[str, Any]:
@@ -362,6 +389,31 @@ def get_driver_image(driver: str, year: Optional[int] = None) -> Dict[str, Any]:
     """
     return openf1_src.fetch_driver_image(driver, year=year)
 
+def get_circuit_geometry(circuit_or_gp: str, year: Optional[int] = None) -> Dict[str, Any]:
+    """
+    Get 2D/3D track centerline coordinates, corners, rotation, and track length for a circuit.
+    Telemetry coordinates available from 2018 onward via FastF1/MultiViewer.
+    """
+    circuits_data = jolpica.fetch_circuits()
+    query = circuit_or_gp.strip().lower()
+    target_id = None
+    for c in circuits_data:
+        c_id = c.get("circuitId", "").lower()
+        c_name = c.get("circuitName", "").lower()
+        if query in [c_id, c_name]:
+            target_id = c.get("circuitId")
+            break
+    if not target_id:
+        aliases = _get_circuit_aliases()
+        target_id = aliases.get(query)
+    if not target_id:
+        target_id = query
+    try:
+        from backend import circuits
+    except ImportError:
+        import circuits
+    return circuits.get_circuit_geometry(target_id, year=year)
+
 TOOL_REGISTRY = [
     get_season_schedule,
     get_race_result,
@@ -378,6 +430,7 @@ TOOL_REGISTRY = [
     get_race_control_events,
     get_weather,
     get_circuit_info,
+    get_circuit_geometry,
     get_driver_profile,
     get_team_history,
     get_live_session,

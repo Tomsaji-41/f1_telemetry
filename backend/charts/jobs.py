@@ -43,8 +43,8 @@ class Job:
             "job_id": self.id,
             "source": "FastF1",
         }
-        if self.status == "preparing" or self.status == "pending" or self.status == "running":
-            d["status"] = "preparing"
+        if self.status in ("preparing", "pending", "running", "loading"):
+            d["status"] = "loading"
             d["eta_s"] = max(1, self.eta_s - int(time.time() - self.created))
         elif self.status == "done":
             d["status"] = "ok"

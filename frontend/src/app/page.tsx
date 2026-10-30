@@ -3,54 +3,129 @@
 import React, { useState, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { MessageSquare, Trophy, Award, Zap, Flag } from "lucide-react";
-import { Panel, Stat, DataTable, EmptyState, Skeleton } from "@/components/primitives/kit";
+import { Panel, Stat, DataTable, EmptyState, Skeleton, ErrorState } from "@/components/primitives/kit";
 import { RaceStoryScrollytelling } from "@/components/dashboard/RaceStoryScrollytelling";
 import { TyreStintGantt } from "@/components/charts/TyreStintGantt";
 import { ChampionshipProgressionChart } from "@/components/charts/ChampionshipProgressionChart";
 import { GridVsFinishChart } from "@/components/charts/GridVsFinishChart";
+import { CircuitCompactPanel } from "@/features/circuits/CircuitCompactPanel";
 import { useInspector } from "@/components/layouts/inspector-drawer";
-import {
-  DEMO_RACE,
-  DEMO_LABEL,
-  SEASON_LABEL,
-  STANDINGS_DRIVERS,
-  STANDINGS_CONSTRUCTORS,
-  COMPOUND_COLOR,
-  getRace,
-  sectorTable,
-  fmtLap,
-} from "@/demo/demoData";
+import { fetcher } from "@/lib/api";
 import en from "@/content/en.json";
 
-function DashboardHub(): React.JSX.Element {
+function DashboardContent(): React.JSX.Element {
   const searchParams = useSearchParams();
   const { inspectItem } = useInspector();
 
-  const race = getRace();
-  const sectors = sectorTable();
-  const classification = race.classification;
-  const winner = classification[0];
-
+  const [raceData, setRaceData] = useState<any>(null);
+  const [raceControlData, setRaceControlData] = useState<any[]>([]);
   const [positionData, setPositionData] = useState<any>(null);
   const [stintData, setStintData] = useState<any>(null);
   const [progressionData, setProgressionData] = useState<any>(null);
   const [gridData, setGridData] = useState<any>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    // In demo mode, fetchApi returns demo data immediately
-    Promise.all([
-      fetch(`/api/charts/position-by-lap`).then((r) => r.json()).catch(() => ({})),
-      fetch(`/api/charts/stints`).then((r) => r.json()).catch(() => ({})),
-      fetch(`/api/charts/championship-progression`).then((r) => r.json()).catch(() => ({})),
-      fetch(`/api/charts/grid-vs-finish`).then((r) => r.json()).catch(() => ({})),
-    ]).then(([pos, stints, prog, grid]) => {
-      setPositionData(pos);
-      setStintData(stints);
-      setProgressionData(prog);
-      setGridData(grid);
-    });
-  }, []);
+    let mounted = true;
+
+    async function loadDashboard() {
+      try {
+        setLoading(true);
+        setError(null);
+
+        // 1. Resolve year and round
+        const currentYear = new Date().getFullYear();
+        let targetYear = searchParams.get("year") ? parseInt(searchParams.get("year")!, 10) : currentYear;
+        let targetRound = searchParams.get("round") ? parseInt(searchParams.get("round")!, 10) : null;
+
+        if (!targetRound) {
+          const schedRes = await fetcher<{ status: string; latest_completed_round: number; year: number }>(
+            `/api/schedule?year=${targetYear}`
+          ).catch(() => null);
+
+          if (schedRes && schedRes.status === "ok") {
+            targetRound = schedRes.latest_completed_round || 1;
+            targetYear = schedRes.year || targetYear;
+          } else {
+            targetRound = 1;
+          }
+        }
+
+        // 2. Critical path: fetch race classification & grid comparison first
+        const [raceRes, gridRes, rcRes] = await Promise.all([
+          fetcher(`/api/race?year=${targetYear}&round=${targetRound}`).catch(() => null),
+          fetcher(`/api/charts/grid-vs-finish?year=${targetYear}&round=${targetRound}`).catch(() => null),
+          fetcher(`/api/race-control?year=${targetYear}&round=${targetRound}`).catch(() => null),
+        ]);
+
+        if (!mounted) return;
+
+        if (raceRes && raceRes.status === "ok") {
+          setRaceData(raceRes);
+        } else if (raceRes?.reason) {
+          setError(raceRes.reason);
+        }
+
+        setGridData(gridRes);
+        setRaceControlData(rcRes?.messages || []);
+        setLoading(false); // Render dashboard immediately without waiting for heavy telemetry
+
+        // 3. Stagger below-the-fold charts progressively so the event-loop / FastF1 loads do not contend
+        fetcher(`/api/charts/position-by-lap?year=${targetYear}&round=${targetRound}`)
+          .then((res) => mounted && setPositionData(res))
+          .catch(() => null);
+
+        fetcher(`/api/charts/stints?year=${targetYear}&round=${targetRound}`)
+          .then((res) => mounted && setStintData(res))
+          .catch(() => null);
+
+        fetcher(`/api/charts/championship-progression?year=${targetYear}`)
+          .then((res) => mounted && setProgressionData(res))
+          .catch(() => null);
+      } catch (err: any) {
+        if (!mounted) return;
+        setError(err.message || "Failed to load Grand Prix telemetry data.");
+        setLoading(false);
+      }
+    }
+
+    loadDashboard();
+
+    return () => {
+      mounted = false;
+    };
+  }, [searchParams]);
+
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        <Skeleton className="h-44 w-full rounded-lg" />
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Skeleton key={i} className="h-24 w-full rounded-lg" />
+          ))}
+        </div>
+        <Skeleton className="h-96 w-full rounded-lg" />
+      </div>
+    );
+  }
+
+  if (error || !raceData) {
+    return (
+      <ErrorState
+        title="Dashboard Telemetry Offline"
+        message={error || "Official race session data could not be retrieved from Jolpica."}
+        source="Jolpica"
+        onRetry={() => window.location.reload()}
+      />
+    );
+  }
+
+  const classification = raceData.classification || [];
+  const winner = classification[0] || { driver: "Leader", team: "Formula 1", time: "" };
+  const totalLaps = raceData.total_laps || (classification[0]?.laps ?? 0);
+  const finishers = classification.filter((c: any) => c.status === "Finished" || c.status?.includes("Lap"));
 
   return (
     <div className="space-y-6">
@@ -60,18 +135,18 @@ function DashboardHub(): React.JSX.Element {
           <div>
             <div className="flex items-center gap-2">
               <span className="text-[11px] font-mono uppercase text-[var(--accent)] font-semibold">
-                Formula 1 Demo Championship
+                FIA Formula 1 World Championship {raceData.year}
               </span>
               <span className="text-[var(--text-3)] text-[12px]">•</span>
               <span className="text-[11px] font-mono text-[var(--text-3)]">
-                {DEMO_RACE.name} — {DEMO_RACE.circuit} ({DEMO_RACE.laps} Laps)
+                Round {raceData.round} — {raceData.circuit} ({totalLaps} Laps)
               </span>
             </div>
             <h1 className="text-[28px] font-semibold text-[var(--text)] tracking-tight mt-1">
-              {DEMO_RACE.name} Dashboard
+              {raceData.race_name}
             </h1>
             <p className="text-[13px] text-[var(--text-2)] mt-0.5">
-              {DEMO_LABEL}
+              Official race results & telemetry verified via Jolpica & FastF1
             </p>
           </div>
 
@@ -94,88 +169,52 @@ function DashboardHub(): React.JSX.Element {
         {/* Quick KPI stats */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 pt-6 mt-6 border-t border-[var(--border)]">
           <Stat
-            label="Chequered Flag Winner"
-            value={winner.name}
-            unit={`(${winner.team})`}
+            label="Grand Prix Winner"
+            value={winner.driver}
+            unit={winner.team ? `(${winner.team})` : ""}
             delta="P1 Classification"
             deltaType="positive"
           />
           <Stat
             label="Total Race Laps"
-            value={`${DEMO_RACE.laps} Laps`}
-            unit="5.0 km"
-            delta="Grand Prix Distance"
+            value={`${totalLaps} Laps`}
+            unit={raceData.date || "Race Day"}
+            delta="Official Race Distance"
             deltaType="neutral"
           />
           <Stat
-            label="Lead Lap Finishers"
-            value={`${classification.filter((c) => c.status === "Finished").length} Cars`}
-            unit="of 10"
-            delta="Verified Gaps"
+            label="Classified Finishers"
+            value={`${finishers.length} Cars`}
+            unit={`of ${classification.length}`}
+            delta="Final Classification"
             deltaType="neutral"
           />
           <Stat
             label="Data Synchronization"
-            value="Illustrative Sample"
-            unit="Demo Engine"
-            delta="14:00 UTC"
-            deltaType="neutral"
+            value="Official Verified"
+            unit="Jolpica + FastF1"
+            delta="Ground Truth Engine"
+            deltaType="positive"
           />
         </div>
       </section>
 
-      {/* Sector Strip: Session Best S1, S2, S3 with holders */}
-      <section className="p-4 border border-[var(--border)] rounded-lg bg-[var(--surface)]">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
-          <span className="text-xs font-mono uppercase tracking-wider text-[var(--text-3)] font-semibold">
-            Track Sector Benchmark
-          </span>
-          <span className="text-[11px] font-mono text-[var(--text-3)]">
-            Purples indicate session-best sector benchmarks
-          </span>
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <div className="p-3 bg-[var(--raised)] border border-[var(--border)] rounded-lg flex items-center justify-between">
-            <div>
-              <span className="text-[11px] font-mono text-[var(--text-3)]">Sector 1 Record</span>
-              <p className="text-lg font-bold font-mono text-purple-400">
-                {sectors.sessionBest.s1.toFixed(3)}s
-              </p>
-            </div>
-            <span className="px-2 py-1 rounded bg-[var(--surface)] font-mono text-xs font-bold text-[var(--text)] border border-[var(--border)]">
-              {sectors.holders.s1}
-            </span>
-          </div>
-
-          <div className="p-3 bg-[var(--raised)] border border-[var(--border)] rounded-lg flex items-center justify-between">
-            <div>
-              <span className="text-[11px] font-mono text-[var(--text-3)]">Sector 2 Record</span>
-              <p className="text-lg font-bold font-mono text-purple-400">
-                {sectors.sessionBest.s2.toFixed(3)}s
-              </p>
-            </div>
-            <span className="px-2 py-1 rounded bg-[var(--surface)] font-mono text-xs font-bold text-[var(--text)] border border-[var(--border)]">
-              {sectors.holders.s2}
-            </span>
-          </div>
-
-          <div className="p-3 bg-[var(--raised)] border border-[var(--border)] rounded-lg flex items-center justify-between">
-            <div>
-              <span className="text-[11px] font-mono text-[var(--text-3)]">Sector 3 Record</span>
-              <p className="text-lg font-bold font-mono text-purple-400">
-                {sectors.sessionBest.s3.toFixed(3)}s
-              </p>
-            </div>
-            <span className="px-2 py-1 rounded bg-[var(--surface)] font-mono text-xs font-bold text-[var(--text)] border border-[var(--border)]">
-              {sectors.holders.s3}
-            </span>
-          </div>
-        </div>
+      {/* Circuit Preview Panel (Phase K) */}
+      <section>
+        <CircuitCompactPanel
+          circuitId={raceData.circuit_id || raceData.circuit}
+          year={raceData.year}
+          round={raceData.round}
+        />
       </section>
 
       {/* Race Control & Pit Timeline + Position Chart */}
       <section>
-        <RaceStoryScrollytelling positionData={positionData} />
+        <RaceStoryScrollytelling
+          positionData={positionData}
+          raceControl={raceControlData}
+          pitStops={raceData.pit_stops}
+        />
       </section>
 
       {/* Grid vs Finish Slope Chart */}
@@ -197,7 +236,7 @@ function DashboardHub(): React.JSX.Element {
       <section>
         <Panel
           title={en.dashboard.classification}
-          subtitle={`Final verified classification for ${DEMO_RACE.name} with tyre stints and lap records`}
+          subtitle={`Official verified classification for ${raceData.race_name} ${raceData.year}`}
         >
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
@@ -210,42 +249,40 @@ function DashboardHub(): React.JSX.Element {
                   <th className="py-2.5 px-3 text-right">Time / Gap</th>
                   <th className="py-2.5 px-3 text-right">Points</th>
                   <th className="py-2.5 px-3 text-right">Gain / Loss</th>
-                  <th className="py-2.5 px-3 text-center">Tyres</th>
-                  <th className="py-2.5 px-3 text-right">Best Lap</th>
+                  <th className="py-2.5 px-3 text-right">Fastest Lap</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[var(--border)] font-mono">
-                {classification.map((item) => {
-                  const driverStints = race.stints.filter((s) => s.driver === item.code);
-                  const isRetired = item.status.startsWith("Retired");
-
+                {classification.map((item: any) => {
+                  const placesGained = item.places_gained ?? 0;
                   return (
                     <tr
-                      key={item.code}
+                      key={item.code || item.driver}
                       className="hover:bg-[var(--raised)] transition-colors"
-                      style={{ borderLeft: `3px solid ${item.teamColor}` }}
+                      style={{ borderLeft: `3px solid ${item.team_color || "var(--accent)"}` }}
                     >
                       <td className="py-2 px-3 font-bold text-[var(--text)]">
-                        P{item.pos}
+                        P{item.position}
                       </td>
                       <td
                         className="py-2 px-3 font-sans font-semibold text-[var(--text)] cursor-pointer hover:underline"
                         onClick={() => {
                           inspectItem({
                             type: "driver",
-                            title: item.name,
+                            title: item.driver,
                             subtitle: item.team,
                             details: {
-                              "Finishing Position": `P${item.pos}`,
+                              "Finishing Position": `P${item.position}`,
                               "Starting Grid": `P${item.grid}`,
                               Points: String(item.points),
-                              "Fastest Lap": fmtLap(item.bestLap),
+                              Status: item.status,
+                              "Fastest Lap": item.fastest_lap || "-",
                             },
-                            queryContext: `Detailed race breakdown for ${item.name}`,
+                            queryContext: `Detailed race breakdown for ${item.driver}`,
                           });
                         }}
                       >
-                        {item.name} <span className="text-[var(--text-3)] text-[11px]">({item.code})</span>
+                        {item.driver} <span className="text-[var(--text-3)] text-[11px]">({item.code})</span>
                       </td>
                       <td className="py-2 px-3 font-sans text-[var(--text-2)]">
                         {item.team}
@@ -254,44 +291,24 @@ function DashboardHub(): React.JSX.Element {
                         P{item.grid}
                       </td>
                       <td className="py-2 px-3 text-right text-[var(--accent)] font-semibold">
-                        {item.timeOrGap}
+                        {item.time}
                       </td>
                       <td className="py-2 px-3 text-right text-[var(--text)] font-bold">
                         {item.points}
                       </td>
-                      <td className="py-2 px-3 text-right">
-                        {isRetired ? (
-                          <span className="px-2 py-0.5 rounded bg-red-500/15 border border-red-500/30 text-red-400 font-bold text-[10px]">
-                            DNF
-                          </span>
-                        ) : item.placesGained != null && item.placesGained > 0 ? (
-                          <span className="text-[var(--positive)] font-bold">
-                            +{item.placesGained}
-                          </span>
-                        ) : item.placesGained != null && item.placesGained < 0 ? (
-                          <span className="text-[var(--negative)]">
-                            {item.placesGained}
-                          </span>
-                        ) : (
-                          <span className="text-[var(--text-3)]">0</span>
-                        )}
-                      </td>
-                      <td className="py-2 px-3 text-center">
-                        <div className="flex items-center justify-center gap-1">
-                          {driverStints.map((s, si) => (
-                            <span
-                              key={si}
-                              className="w-5 h-5 rounded-full flex items-center justify-center font-bold text-[10px] text-black shadow-xs"
-                              style={{ backgroundColor: COMPOUND_COLOR[s.compound] }}
-                              title={`Stint ${s.stint}: ${s.compound} (${s.laps} laps)`}
-                            >
-                              {s.compound}
-                            </span>
-                          ))}
-                        </div>
+                      <td
+                        className={`py-2 px-3 text-right font-bold ${
+                          placesGained > 0
+                            ? "text-[var(--positive)]"
+                            : placesGained < 0
+                            ? "text-[var(--negative)]"
+                            : "text-[var(--text-3)]"
+                        }`}
+                      >
+                        {placesGained > 0 ? `+${placesGained}` : placesGained}
                       </td>
                       <td className="py-2 px-3 text-right text-[var(--text-2)]">
-                        {fmtLap(item.bestLap)}
+                        {item.fastest_lap || "-"}
                       </td>
                     </tr>
                   );
@@ -301,88 +318,14 @@ function DashboardHub(): React.JSX.Element {
           </div>
         </Panel>
       </section>
-
-      {/* Standings Summary: Drivers & Constructors with SEASON_LABEL */}
-      <section className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* Drivers Standings */}
-        <div className="p-5 border border-[var(--border)] rounded-lg bg-[var(--surface)]">
-          <div className="flex justify-between items-center mb-3">
-            <h2 className="text-base font-bold text-[var(--text)]">
-              Drivers Championship Standings
-            </h2>
-            <span className="text-xs font-mono text-[var(--text-3)]">
-              {SEASON_LABEL}
-            </span>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs font-mono">
-              <thead className="border-b border-[var(--border)] text-[var(--text-3)]">
-                <tr>
-                  <th className="py-2 px-2 text-left">Pos</th>
-                  <th className="py-2 px-2 text-left">Driver</th>
-                  <th className="py-2 px-2 text-left">Team</th>
-                  <th className="py-2 px-2 text-right">Wins</th>
-                  <th className="py-2 px-2 text-right">Points</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[var(--border)]">
-                {STANDINGS_DRIVERS.map((d) => (
-                  <tr key={d.code} className="hover:bg-[var(--raised)]">
-                    <td className="py-2 px-2 font-bold text-[var(--text)]">P{d.pos}</td>
-                    <td className="py-2 px-2 font-sans font-medium text-[var(--text)]">{d.name}</td>
-                    <td className="py-2 px-2 font-sans text-[var(--text-2)]">{d.team}</td>
-                    <td className="py-2 px-2 text-right text-[var(--text-3)]">{d.wins}</td>
-                    <td className="py-2 px-2 text-right font-bold text-[var(--accent)]">{d.points}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        {/* Constructors Standings */}
-        <div className="p-5 border border-[var(--border)] rounded-lg bg-[var(--surface)]">
-          <div className="flex justify-between items-center mb-3">
-            <h2 className="text-base font-bold text-[var(--text)]">
-              Constructors Championship Standings
-            </h2>
-            <span className="text-xs font-mono text-[var(--text-3)]">
-              {SEASON_LABEL}
-            </span>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs font-mono">
-              <thead className="border-b border-[var(--border)] text-[var(--text-3)]">
-                <tr>
-                  <th className="py-2 px-2 text-left">Pos</th>
-                  <th className="py-2 px-2 text-left">Constructor</th>
-                  <th className="py-2 px-2 text-right">Points</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[var(--border)]">
-                {STANDINGS_CONSTRUCTORS.map((c) => (
-                  <tr key={c.id} className="hover:bg-[var(--raised)]">
-                    <td className="py-2 px-2 font-bold text-[var(--text)]">P{c.pos}</td>
-                    <td className="py-2 px-2 font-sans font-medium text-[var(--text)] flex items-center gap-2">
-                      <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: c.color }} />
-                      {c.name}
-                    </td>
-                    <td className="py-2 px-2 text-right font-bold text-[var(--accent)]">{c.points}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </section>
     </div>
   );
 }
 
-export default function HomePage(): React.JSX.Element {
+export default function DashboardHub(): React.JSX.Element {
   return (
-    <Suspense fallback={<div className="p-8 text-center text-[12px] font-mono text-[var(--text-3)]">Loading workspace intelligence...</div>}>
-      <DashboardHub />
+    <Suspense fallback={<div className="p-8 text-center text-sm font-mono text-[var(--text-3)]">Loading Dashboard...</div>}>
+      <DashboardContent />
     </Suspense>
   );
 }

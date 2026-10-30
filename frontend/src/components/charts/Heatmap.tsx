@@ -7,8 +7,9 @@
  */
 import React, { useMemo } from "react";
 import { scaleLinear } from "d3-scale";
+import { useIdentity } from "@/lib/useIdentity";
 
-interface SectorRow {
+export interface SectorRow {
   code: string;
   s1_best_ms: number | null;
   s1_mean_ms: number | null;
@@ -25,41 +26,46 @@ interface SectorRow {
   ideal_ms: number | null;
 }
 
-interface HeatmapProps {
-  d: {
-    rows: SectorRow[];
+export interface HeatmapProps {
+  d?: {
+    rows?: SectorRow[];
     drivers?: { code: string; colour: string; name: string }[];
+    status?: string;
+    coverage_note?: string;
   };
 }
 
 function formatGap(ms: number | null): string {
-  if (ms == null) return "—";
+  if (ms == null || !Number.isFinite(ms)) return "—";
   if (ms === 0) return "±0.000";
   return `+${(ms / 1000).toFixed(3)}`;
 }
 
 function formatMs(ms: number | null): string {
-  if (ms == null) return "—";
+  if (ms == null || !Number.isFinite(ms)) return "—";
   return (ms / 1000).toFixed(3);
 }
 
 export function Heatmap({ d }: HeatmapProps) {
+  const { getDriver, getDriverColor } = useIdentity();
+  const rows = Array.isArray(d?.rows) ? d.rows : [];
+
   // Sort by ideal_ms ascending
   const sorted = useMemo(
     () =>
-      [...d.rows].sort((a, b) => {
+      [...rows].sort((a, b) => {
         if (a.ideal_ms == null && b.ideal_ms == null) return 0;
         if (a.ideal_ms == null) return 1;
         if (b.ideal_ms == null) return -1;
         return a.ideal_ms - b.ideal_ms;
       }),
-    [d.rows]
+    [rows]
   );
 
   // p90 of gaps for alpha scaling
   const allGaps = sorted.flatMap((r) =>
     [r.s1_gap_ms, r.s2_gap_ms, r.s3_gap_ms].filter(
-      (v): v is number => v != null && v > 0
+      (v): v is number => v != null && Number.isFinite(v) && v > 0
     )
   );
   const p90 = useMemo(() => {
@@ -69,9 +75,17 @@ export function Heatmap({ d }: HeatmapProps) {
   }, [allGaps]);
 
   const alphaScale = scaleLinear()
-    .domain([0, p90])
+    .domain([0, Math.max(p90, 1)])
     .range([0, 0.6])
     .clamp(true);
+
+  if (rows.length === 0) {
+    return (
+      <div className="text-center py-8 text-[12px] text-[var(--text-3)] font-mono">
+        {d?.coverage_note || "No sector times recorded for this session."}
+      </div>
+    );
+  }
 
   const sectors = [1, 2, 3] as const;
 
@@ -98,22 +112,30 @@ export function Heatmap({ d }: HeatmapProps) {
         </thead>
         <tbody className="divide-y divide-[var(--border)]">
           {sorted.map((row) => {
-            const meta = d.drivers?.find((x) => x.code === row.code);
+            const drvIdentity = getDriver(row.code);
+            const meta = d?.drivers?.find((x) => x.code === row.code);
+            const teamColor =
+              drvIdentity?.teamColor ||
+              meta?.colour ||
+              getDriverColor(row.code) ||
+              "var(--text-3)";
+            const displayName =
+              drvIdentity?.name || meta?.name || row.code;
+
             return (
               <tr key={row.code} className="hover:bg-[var(--raised)]">
                 <td className="py-1.5 px-3 font-mono text-[var(--text)]">
                   <span
-                    className="inline-block w-2 h-2 rounded-full mr-1.5"
-                    style={{
-                      backgroundColor: meta?.colour || "var(--text-3)",
-                    }}
+                    className="inline-block w-2 h-2 rounded-full mr-1.5 align-middle"
+                    style={{ backgroundColor: teamColor }}
                   />
-                  {row.code}
+                  <span title={displayName}>{row.code}</span>
                 </td>
                 {sectors.map((s) => {
                   const gap = row[`s${s}_gap_ms` as keyof SectorRow] as number | null;
                   const isBest = row[`s${s}_session_best` as keyof SectorRow] as boolean;
-                  const alpha = gap != null && gap > 0 ? alphaScale(gap) : 0;
+                  const rawAlpha = gap != null && Number.isFinite(gap) && gap > 0 ? alphaScale(gap) : 0;
+                  const alpha = Number.isFinite(rawAlpha) ? rawAlpha : 0;
 
                   return (
                     <td
@@ -131,7 +153,9 @@ export function Heatmap({ d }: HeatmapProps) {
                         fontWeight: isBest ? 600 : 400,
                       }}
                     >
-                      {isBest ? formatMs(row[`s${s}_best_ms` as keyof SectorRow] as number | null) : formatGap(gap)}
+                      {isBest
+                        ? formatMs(row[`s${s}_best_ms` as keyof SectorRow] as number | null)
+                        : formatGap(gap)}
                     </td>
                   );
                 })}

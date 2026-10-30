@@ -11,8 +11,13 @@ import pandas as pd
 
 try:
     from backend import config
+    from backend.charts.schema import ChartResponse
 except ImportError:
     import config
+    try:
+        from .schema import ChartResponse
+    except ImportError:
+        from schema import ChartResponse
 
 
 # ---------------------------------------------------------------------------
@@ -20,13 +25,27 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 def envelope(source: str, status: str = "ok", note: str = "", **payload) -> Dict[str, Any]:
-    return {
-        "status": status,
+    raw = {
         "source": source,
+        "status": status,
         "coverage_note": note,
-        "fetched_at": datetime.now(timezone.utc).strftime("%d %b %Y, %H:%M UTC"),
         **payload,
     }
+    try:
+        return ChartResponse.model_validate(raw).model_dump()
+    except Exception:
+        norm_status = status
+        if norm_status in ("empty", "outside_coverage", "not_ingested"):
+            norm_status = "not_available"
+        elif norm_status == "preparing":
+            norm_status = "loading"
+        return {
+            "status": norm_status,
+            "source": source,
+            "coverage_note": note,
+            "fetched_at": datetime.now(timezone.utc).strftime("%d %b %Y, %H:%M UTC"),
+            **payload,
+        }
 
 
 # ---------------------------------------------------------------------------

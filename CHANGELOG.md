@@ -1,4 +1,104 @@
-# CHANGELOG
+## [V7.1.0] - Analytics Studio Rendering, Replay Hardening, Dynamic Contrast & Single-Host Proxy (localhost:3000)
+
+### Phase 1: Analytics Studio Chart Rendering & Session Resolution
+- **Dynamic Session Resolution**: Replaced fixed year/round literals with `get_latest_completed_session()` and `/api/sessions/available` from Jolpica. Routes accept optional `year` and `round` and dynamically resolve the latest completed session at runtime.
+- **Multi-Source FastF1 Fallback**: Implemented `SessionAdapter` in `backend/charts/loader.py`. If FastF1 raises `DataNotLoadedError` or hits upstream timing auth blocks (HTTP 401), automatically synthesizes compliant session objects via OpenF1 (2023–2024) and Jolpica (1950–2026), providing `.laps`, `.results`, and `.weather_data`.
+- **Chart Component Hardening & Schema Alignment**:
+  - `PositionByLapChart.tsx`: Safeguarded series lap iteration with fallback to root `data.x`, normalized `s.driver` and `s.code`, and added interactive drawer inspection.
+  - `SlopeChart.tsx` (Grid vs Finish): Wired directly into the `positions` tab of Analytics Studio alongside the Bump Chart. Correctly displays start vs finish deltas, position changes, DNF/DSQ badges, and WCAG-compliant symbols (▲ / ▼ / —).
+  - `TyreStintGantt.tsx`: Aligned with backend schema to support both `series` and `stints` arrays, handling compound colors and multi-stint pit sequences.
+  - `ChampionshipProgressionChart.tsx`: Supported both driver and constructor standings with points aggregation and normalized bar graphs.
+  - `useChart.ts`: Implemented automatic 2-second polling on `status === "preparing"` with an explicit 45-second timeout and retry capability (never infinite spinner).
+
+### Phase 2: Live Telemetry Replay Hardening
+- **Replay Endpoint**: Fixed 500 error on `/api/replay/{year}/{round}/lap/{lap_num}` by referencing internal raw dict parser `_fetch_race_classification_dict(year, round)`.
+- **Gap Calculation (Rule B8)**: Utilized `utils.compute_and_validate_gaps` and `utils.format_gap_display` to compute leader and interval gaps strictly per F1 timing regulations.
+- **Driver and Team Resolution**: Bound `/api/drivers/{id}` and `/api/teams/{id}` to dynamic resolvers supporting both 3-letter codes (e.g. `ver`) and standard Jolpica identifiers (e.g. `max_verstappen`).
+- **Real Weather Integration**: Extracted track and air temperatures and rainfall status from session adapter data.
+
+### Phase 3: Visual Polish, Navbar Session Resolution & WCAG 2.1 Contrast
+- **Navbar Session Picker**: Updated `frontend/src/components/layouts/navbar.tsx` to populate season list dynamically from `/api/sessions/available`, defaulting to the latest completed round.
+- **Link Reset**: Added `a { text-decoration: none !important; color: inherit; }` in `frontend/src/app/globals.css` to eliminate underlines on cards and links.
+- **Typography**: Enforced `font-weight: 700;` on heading levels (`h1` through `h6`).
+- **Dynamic Contrast Helper**: Created `frontend/src/lib/colors.ts` with WCAG 2.1 relative luminance and contrast ratio calculations (`getAccessibleTextColor`), ensuring text overlaid on dynamic team colors remains legible. Added unit tests in `src/lib/__tests__/colors.test.ts`.
+
+### Phase 4: Combined Single-Host Deployment (localhost:3000)
+- Configured Next.js rewrites in `frontend/next.config.mjs` routing `/api/:path*` directly to FastAPI (`http://127.0.0.1:8000/api/:path*`).
+- Verified all endpoints accessible via `http://localhost:3000`:
+  - `/api/health` -> HTTP 200 (healthy)
+  - `/api/sessions/available` -> HTTP 200
+  - `/api/charts/position-by-lap` -> HTTP 200
+  - `/api/charts/grid-vs-finish` -> HTTP 200
+  - `/api/charts/gap-evolution` -> HTTP 200
+  - `/api/charts/stints` -> HTTP 200
+  - `/api/charts/championship-progression` -> HTTP 200
+  - `/api/replay/2026/18/lap/1` -> HTTP 200
+  - `/api/drivers/ver` -> HTTP 200
+  - `/api/teams/red_bull` -> HTTP 200
+- **Test Suite Results**:
+  - Backend: 75/75 passed in pytest (100%).
+  - Frontend: 11/11 passed across 4 test suites in Vitest (100%).
+  - Production Build: Next.js compiled 12/12 static and dynamic routes cleanly.
+
+---
+
+
+
+### Phase 0: Backend Starts & Repo Hygiene
+- Fixed `backend/state.py` line 154 by adding `Tuple` to `from typing import ...`.
+- Deleted duplicate/legacy files: `app.py`, `check_cache.py`, `clear_bad_cache.py`, `read_prompt.py`, `backend/chart_routes.py`, `backend/charts.py`, `frontend/next.config.ts`, `v7_requirements.txt`.
+- Hardened `/api/chat` and `/api/chat/stream` to return `422 Unprocessable Entity` when neither `text`, `action`, nor `chip` is provided.
+
+### Phase 1: Security Hardening & Secret Hygiene
+- **`.gitignore` UTF-8 BOM**: Stripped `\ufeff` byte-order mark from `.gitignore` so line 1 `.env` correctly matches `.env`. Verified with `git check-ignore -v .env`.
+- **Git Secret Scan**: Scanned entire git commit history across all branches for secrets, Google API keys, Groq keys, OpenAI keys, and auth tokens. Result: 0 committed secrets.
+- **Frontend Dependencies Audit**: Upgraded `next` to `15.5.28`, updated `sharp`, `zod`, and added override `"postcss": "^8.5.32"`. `npm audit --omit=dev` reports 0 vulnerabilities (0 critical, 0 high, 0 moderate, 0 low).
+- **Backend Dependencies Audit & Hardening**: Installed and verified `pip-audit`, `bandit`, and `slowapi`. Pinned all versions in `requirements.txt`. `pip-audit --local` reports 0 vulnerabilities. `bandit -r backend -ll` reports 0 issues.
+- **Bounded Conversation Store**: Replaced unbounded in-memory dictionary with `BoundedConversationStore` (`max_clients=500`, `ttl_seconds=3600`).
+- **Rate Limiting & Payload Limits**: Configured `@limiter.limit("60/minute")` on chat endpoints with automatic test-bypass. Enforced message length cap (<= 1000 chars) and body size limit (<= 65536 bytes).
+- **Security Headers & Network Restrictions**: Added Content-Security-Policy, `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, and `X-Frame-Options: DENY`. Configured Next.js image domain allowlist for `upload.wikimedia.org` and `media.formula1.com`.
+- **CI Workflows**: Added `.github/dependabot.yml` and `.github/workflows/security.yml`.
+
+### Phase 2: Pit Boss Honesty, Context & Structured Chips
+- **Chips as Structure**: Refactored follow-up chips to carry `{ action: "chip", intent: ..., slots: { ... } }` instead of free text labels, eliminating bugs where chips like "Tyre degradation" or "Sector pace" re-entered the race name parser.
+- **Race Resolver Fallback Fix**: Prevented race resolver from defaulting to round 1 or latest completed race when resolving ungrounded or ambiguous GP names; queries requiring race clarification now emit structured `clarify` options with candidate seasons/races.
+- **Honest Failure Propagation**: Ensured that when any data source returns an error or empty classification, `verified` is strictly `false`, `sources` is `[]`, and the response explicitly identifies the upstream source and failure reason.
+- **Template Sanitization**: Removed hollow templates such as "The circuit is located." and replaced with verified geographic and historical circuit descriptors.
+- **Context Grounding**: Ensured `last_resolved_race` is only set when a real round is resolved from an active season schedule. Standings, champions, career, and circuit queries never overwrite or leak race rounds.
+
+### Phase 3: Real Data API Routes (`backend/api_data.py`)
+- Created 12 grounded endpoints: `/api/seasons`, `/api/schedule`, `/api/race`, `/api/standings`, `/api/teams`, `/api/teams/{id}`, `/api/drivers`, `/api/drivers/{id}`, `/api/legends`, `/api/eras`, `/api/race-control`, `/api/live/status`, `/api/live/stream`, `/api/replay/...`.
+- Built dynamic GP and circuit aliases with SQLite caching (30-day TTL).
+- Fixed `fetch_pit_stops` to handle zero-stop races (e.g. Spa 2021) without raising exceptions.
+
+### Phase 4: Purge Demo Mode & Dynamic Detail Pages
+- Completely purged all occurrences of `demoData`, `DEMO_MODE`, and "demo" across frontend and backend.
+- Verified dynamic routing on `/drivers/[driverId]` and `/teams/[teamId]` with real Jolpica `driverId` and `constructorId`.
+- Added constructor badge and Wikipedia logo fallback for team profile cards.
+- Refactored Live feed to serve real OpenF1 session data when active, with clear FastF1 replay labeling otherwise.
+
+### Phase 5: Official F1 Carbon & Red Design System
+- **Surfaces**: Primary carbon black `--bg: #15151E`, `--surface: #1E1E28`, `--raised: #282836`, `--overlay: #323244`.
+- **Accent**: Official Formula 1 Racing Red `--accent: #E10600`, `--accent-hover: #FF1801`, `--live: #E10600`.
+- **Text & Contrast**: High-contrast typography `--text: #FFFFFF` (15.5:1), `--text-2: #D0D0DC` (11.5:1), `--text-3: #9E9EB0` (7.4:1), comfortably exceeding WCAG AA 4.5:1 requirement.
+- **Typography**: Titillium Web headings (`var(--font-heading)`), IBM Plex Sans for UI body and labels, IBM Plex Mono for numbers and telemetry.
+- **Link Reset**: Added global `a { color: inherit; text-decoration: none; }` to eliminate unwanted underlines.
+
+### Phase 6: Opening Scene
+- Created `frontend/public/brand/logo-transparent.png` with transparent background.
+- Built `frontend/src/components/IntroSplash.tsx` full-screen overlay with centered logo, 1.8s fade-out into Dashboard Hub, executed once per session via `sessionStorage`. Mounted in `frontend/src/app/layout.tsx`.
+
+### Phase 7: Performance & Session Caching
+- Standardized SQLite caching TTLs for historical vs active season data.
+- Bounded FastF1 LRU session loader in `backend/charts/loader.py` with multi-endpoint memory sharing.
+
+### Phase 8: Full Verification Suite
+- **Backend Tests**: 75/75 passed (100%) in pytest.
+- **Frontend Tests**: 8/8 passed (100%) in Vitest.
+- **Next.js Production Build**: `npm run build` compiled 12/12 static and dynamic routes cleanly.
+- **Banned Strings**: 0 occurrences of `demoData`, `DEMO_MODE`, `DEMO_LABEL`, `Sample Grand Prix`, or `Demo Circuit`.
+
+---
 
 ## [Expansion 01] - Chart Data Builders, Routes & Frontend Chart Components
 
@@ -98,6 +198,70 @@
 5 values checked against official FIA Formula 1 records:
 
 | Check # | Entity / Metric | Official FIA Record (Expected) | System Received (Jolpica / Backend) | Status |
+| 1 | 2023 Italian GP Winner | Max Verstappen | Max Verstappen | Verified |
+| 2 | 2023 Drivers Champion | Max Verstappen (575 pts) | Max Verstappen (575 pts) | Verified |
+| 3 | 2023 Constructors Champion | Red Bull (860 pts) | Red Bull (860 pts) | Verified |
+| 4 | 2021 Belgian GP Winner | Max Verstappen | Max Verstappen | Verified |
+| 5 | 2024 Bahrain GP Winner | Max Verstappen | Max Verstappen | Verified |
+
+---
+
+## [Phase 1 - 5] - Real F1 Data Pipeline, Demo Mode Removal & Pit Boss Honesty Fixes
+
+### Phase 0: Startup & Dead Code Cleanup
+- Fixed backend import startup error in `backend/state.py` (added missing `Tuple` typing import).
+- Removed dead and duplicate files: `frontend/next.config.ts`, `backend/chart_routes.py`, `backend/charts.py`.
+- Updated `/api/chat` to validate required fields and return 422 Unprocessable Entity instead of 404.
+- Cleaned environment variable parsing (`_clean` in `backend/config.py`) to safely strip quoting from shell environments.
+
+### Phase 1: Pit Boss Honesty & Context Accuracy
+- **Failure propagation**: Tool failures and unavailable data now return `verified: false`, empty sources `[]`, and explicit failure descriptions (e.g. `Could not load race results for <race> <year> from Jolpica (<reason>)`). Never returns `verified: true` on failed lookups.
+- **Removed hollow templates**: In `backend/render.py`, all renderers verify required fields. Hollow statements like `"The circuit is located."` have been completely removed.
+- **Context leak elimination**: `last_resolved_race` is only assigned when a real round is resolved in the schedule. Never defaults to round 1. Standings, champions, driver profiles, and circuit lookups never set `last_resolved_race`.
+- **Dynamic circuit aliases**: Replaced hardcoded dictionary in `backend/tools.py` with dynamic schedule and circuit scanner cached for 30 days in SQLite.
+- Standardized branding to **Pit Boss** and fixed source tag deduplication in UI (`ChatThread.tsx` and `chat-provider.tsx`).
+
+### Phase 2: Grounded Real Data API Endpoints (`backend/api_data.py`)
+- Created standardized REST endpoints returning structured `{status, source, fetched_at, coverage_note}` payloads:
+  - `GET /api/seasons`: 1950 to present dynamically calculated.
+  - `GET /api/schedule`: Full season schedule with `latest_completed_round`.
+  - `GET /api/race`: Race classification, tyre stints per driver (FastF1 2018+), team colors.
+  - `GET /api/standings`: Driver and constructor championship standings.
+  - `GET /api/teams` & `GET /api/teams/{id}`: Season constructors, title records, and driver rosters.
+  - `GET /api/drivers` & `GET /api/drivers/{id}`: Driver standings, headshots (OpenF1 / Wikipedia), career totals.
+  - `GET /api/legends`: World champion aggregation from 1950 to present.
+  - `GET /api/eras`: Historical technical eras with dynamic championship counts.
+  - `GET /api/race-control`: Real race control messages from FastF1 with real lap numbers and timestamps.
+  - `GET /api/live/status`: Dynamic status reporting live mode when OpenF1 session is active, or replay mode on completed FastF1 sessions.
+  - `GET /api/live/stream`: Server-Sent Events (SSE) telemetry stream with position, intervals, laps, and car data.
+  - `GET /api/replay/{year}/{round}/lap/{n}`: Replay snapshots for historical session exploration.
+- Added `drs_available` channel indicator in `backend/charts/telemetry.py`.
+
+### Phase 3: Demo Data Removal & Frontend Grounding
+- Deleted `frontend/src/demo/demoData.ts` and `demoData.test.ts`. Purged the entire `frontend/src/demo` directory.
+- Rewrote `frontend/src/lib/api.ts` to fetch from real API endpoints without demo interceptions.
+- Removed `NEXT_PUBLIC_DEMO_MODE` and demo badges across Navbar, Footer, and all app pages.
+- Rewrote pages to use TanStack Query hooks backed by real data:
+  - `frontend/src/app/page.tsx` (Dashboard)
+  - `frontend/src/app/analytics/page.tsx`
+  - `frontend/src/app/teams/page.tsx` & `frontend/src/app/teams/[teamId]/page.tsx`
+  - `frontend/src/app/drivers/page.tsx` & `frontend/src/app/drivers/[driverId]/page.tsx`
+  - `frontend/src/app/legends/page.tsx`
+  - `frontend/src/app/live-feed/page.tsx`
+  - `frontend/src/components/dashboard/RaceStoryScrollytelling.tsx`
+
+### Phase 4: Performance & Resilience
+- Standardized SQLite cache TTLs: past seasons (`year < current_year`) cached 30 days (`TTL_PAST_SEASON`), current season standings cached 10 minutes (`TTL_CURRENT_STANDINGS`), live session cached 2 seconds (`TTL_LIVE_SESSION`).
+- Added in-flight request deduplication via locks per cache key.
+- Implemented stale cache fallback: on upstream timeout or network outage, cached responses are served with header `X-Data-Stale: true` and annotated `coverage_note`.
+- Enhanced FastF1 session loader (`backend/charts/loader.py`) with a bounded LRU cache (max 4 sessions, ~600MB) sharing loaded session objects across telemetry, speed traces, lap times, and track map endpoints.
+
+### Phase 5: Verification & Test Suite
+- All 75 backend tests passing in pytest (100%).
+- All frontend Vitest unit and component tests passing (100%).
+- `test_no_banned_f1_strings` passes verifying 0 occurrences of `demoData`, `DEMO_MODE`, `DEMO_LABEL`, `Sample Grand Prix`, or `Demo Circuit` across frontend and backend source code.
+- Recorded offline test fixtures in `tests/fixtures/jolpica/`, `tests/fixtures/openf1/`, and `tests/fixtures/fastf1_mini.pkl`.
+- Full Next.js production build (`npm run build`) compiles cleanly with 0 errors.
 |---|---|---|---|---|
 | **1** | Career wins for Lewis Hamilton | **105** (post-2024 Belgian GP) / **106** | **106** wins | **VERIFIED** |
 | **2** | Constructor Championships for Ferrari | **16** World Constructors' Championships | **16** titles (1961, 1964, 1975-77, 1979, 1982-83, 1999-2004, 2007-08) | **VERIFIED** |

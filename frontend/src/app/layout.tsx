@@ -1,11 +1,12 @@
 import type { Metadata } from "next";
-import { IBM_Plex_Sans, IBM_Plex_Mono } from "next/font/google";
+import { IBM_Plex_Sans, IBM_Plex_Mono, Titillium_Web } from "next/font/google";
 import "./globals.css";
 import "@/styles/tokens.css";
 import { QueryProvider } from "@/components/providers/query-provider";
 import { Navbar } from "@/components/layouts/navbar";
 import { Sidebar } from "@/components/layouts/sidebar";
 import { AppFooter } from "@/components/layouts/Footer";
+import { IntroSplash } from "@/components/IntroSplash";
 
 const ibmPlexSans = IBM_Plex_Sans({
   subsets: ["latin"],
@@ -18,6 +19,13 @@ const ibmPlexMono = IBM_Plex_Mono({
   subsets: ["latin"],
   weight: ["400", "500", "600"],
   variable: "--font-num",
+  display: "swap",
+});
+
+const titilliumWeb = Titillium_Web({
+  subsets: ["latin"],
+  weight: ["400", "600", "700"],
+  variable: "--font-heading",
   display: "swap",
 });
 
@@ -49,9 +57,10 @@ export default function RootLayout({
       lang="en"
       data-theme="dark"
       data-build={buildStamp}
-      className={`${ibmPlexSans.variable} ${ibmPlexMono.variable}`}
+      className={`${ibmPlexSans.variable} ${ibmPlexMono.variable} ${titilliumWeb.variable}`}
     >
       <body className="bg-[var(--bg)] text-[var(--text)] antialiased flex flex-col min-h-screen">
+        <IntroSplash />
         <QueryProvider>
           <InspectorProvider>
             <Suspense fallback={null}>

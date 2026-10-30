@@ -192,3 +192,15 @@ npm run dev
 # Frontend Vitest suite
 cd frontend && npm test -- --run
 ```
+
+---
+
+## 5. User-Supplied Team Logo Overrides
+
+For teams where freely licensed logos are unavailable on Wikimedia Commons due to trademark or copyright restrictions (such as Ferrari or Red Bull), users can supply local logo image files:
+
+- **Configurable Directory**: Set via the `LOGO_OVERRIDE_DIR` environment variable (defaults to `assets/logos/`).
+- **File Naming**: Place files named `<constructorId>.svg`, `<constructorId>.png`, or `<constructorId>.jpg` in this directory (e.g. `assets/logos/ferrari.png`, `assets/logos/red_bull.png`, `assets/logos/aston_martin.svg`).
+- **Priority**: Files in the override directory always take precedence over runtime Wikidata resolution.
+- **Trademark Notice**: Formula 1 team logos, crests, and emblems are registered trademarks of their respective Formula One constructors and entities. Ensure you have the appropriate permissions, rights, and attribution for any custom logo assets you supply.
+

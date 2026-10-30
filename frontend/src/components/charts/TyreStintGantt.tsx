@@ -5,6 +5,7 @@ import { scaleLinear } from "d3-scale";
 import { ChartShell } from "./ChartShell";
 import { TyreBadge } from "../primitives/kit";
 import { useInspector } from "../layouts/inspector-drawer";
+import { useIdentity } from "@/lib/useIdentity";
 
 interface StintData {
   driver: string;
@@ -27,14 +28,21 @@ interface TyreStintGanttProps {
 
 export function TyreStintGantt({ data, loading = false }: TyreStintGanttProps) {
   const { inspectItem } = useInspector();
-  const rawStints = data?.series || [];
+  const { getDriver, getDriverColor } = useIdentity();
+  const rawStints = (data?.series || (data as any)?.stints || []) as StintData[];
 
   // Group by driver
   const driverStints = useMemo(() => {
     const map: Record<string, StintData[]> = {};
     rawStints.forEach((s) => {
-      if (!map[s.driver]) map[s.driver] = [];
-      map[s.driver].push(s);
+      const d = s.driver || (s as any).code || "DRV";
+      if (!map[d]) map[d] = [];
+      map[d].push({
+        ...s,
+        driver: d,
+        start_lap: Number(s.start_lap) || 1,
+        end_lap: Number(s.end_lap) || Number(s.start_lap) || 1,
+      });
     });
     return map;
   }, [rawStints]);
@@ -52,40 +60,47 @@ export function TyreStintGantt({ data, loading = false }: TyreStintGanttProps) {
   const width = 800;
   const rowHeight = 28;
   const height = Math.max(220, drivers.length * rowHeight + 50);
-  const margin = { top: 20, right: 30, bottom: 30, left: 60 };
+  const margin = { top: 20, right: 30, bottom: 30, left: 70 };
 
   const xScale = useMemo(() => {
     return scaleLinear()
       .domain([1, maxLap])
       .range([margin.left, width - margin.right]);
-  }, [maxLap, width]);
+  }, [maxLap, width, margin.left, margin.right]);
 
   const getCompoundColor = (compound: string) => {
-    const norm = compound.toUpperCase();
+    const norm = (compound || "").toUpperCase();
     if (norm.includes("SOFT") || norm === "S") return "var(--tyre-soft)";
     if (norm.includes("MEDIUM") || norm === "M") return "var(--tyre-medium)";
     if (norm.includes("HARD") || norm === "H") return "var(--tyre-hard)";
     if (norm.includes("INTER") || norm === "I") return "var(--tyre-inter)";
-    return "var(--tyre-wet)";
+    if (norm.includes("WET") || norm === "W") return "var(--tyre-wet)";
+    return "var(--tyre-unknown)";
   };
 
   const csvData = useMemo(() => {
-    let csv = "Driver,Stint,Compound,StartLap,EndLap,Length\n";
+    let csv = "Driver,DriverName,Stint,Compound,StartLap,EndLap,Length\n";
     rawStints.forEach((s) => {
-      csv += `${s.driver},${s.stint},${s.compound},${s.start_lap},${s.end_lap},${s.end_lap - s.start_lap + 1}\n`;
+      const drvMeta = getDriver(s.driver);
+      const name = drvMeta?.name || s.driver;
+      csv += `${s.driver},"${name}",${s.stint},${s.compound},${s.start_lap},${s.end_lap},${s.end_lap - s.start_lap + 1}\n`;
     });
     return csv;
-  }, [rawStints]);
+  }, [rawStints, getDriver]);
 
   const tableRows = useMemo(() => {
-    return rawStints.map((s) => [
-      s.driver,
-      s.stint,
-      s.compound,
-      `${s.start_lap} - ${s.end_lap}`,
-      s.end_lap - s.start_lap + 1,
-    ]);
-  }, [rawStints]);
+    return rawStints.map((s) => {
+      const drvMeta = getDriver(s.driver);
+      const name = drvMeta?.name || s.driver;
+      return [
+        name,
+        s.stint,
+        s.compound,
+        `${s.start_lap} - ${s.end_lap}`,
+        s.end_lap - s.start_lap + 1,
+      ];
+    });
+  }, [rawStints, getDriver]);
 
   return (
     <ChartShell
@@ -104,37 +119,52 @@ export function TyreStintGantt({ data, loading = false }: TyreStintGanttProps) {
       <div className="w-full overflow-x-auto">
         <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto select-none">
           {/* Laps Grid */}
-          {Array.from({ length: 6 }, (_, i) => Math.round((maxLap / 5) * i) || 1).map((lap) => (
-            <g key={lap}>
-              <line
-                x1={xScale(lap)}
-                y1={margin.top}
-                x2={xScale(lap)}
-                y2={height - margin.bottom}
-                stroke="var(--border)"
-                strokeWidth={0.8}
-                strokeDasharray="2 2"
-              />
-              <text
-                x={xScale(lap)}
-                y={height - margin.bottom + 16}
-                fontSize={10}
-                fill="var(--text-3)"
-                textAnchor="middle"
-                fontFamily="var(--font-num)"
-              >
-                L{lap}
-              </text>
-            </g>
-          ))}
+          {Array.from({ length: 6 }, (_, i) => Math.round((maxLap / 5) * i) || 1).map((lap) => {
+            const x = xScale(lap);
+            if (!Number.isFinite(x)) return null;
+            return (
+              <g key={lap}>
+                <line
+                  x1={x}
+                  y1={margin.top}
+                  x2={x}
+                  y2={height - margin.bottom}
+                  stroke="var(--border)"
+                  strokeWidth={0.8}
+                  strokeDasharray="2 2"
+                />
+                <text
+                  x={x}
+                  y={height - margin.bottom + 16}
+                  fontSize={10}
+                  fill="var(--text-3)"
+                  textAnchor="middle"
+                  fontFamily="var(--font-num)"
+                >
+                  L{lap}
+                </text>
+              </g>
+            );
+          })}
 
           {/* Stint Bars per Driver */}
           {drivers.map((drv, drvIdx) => {
             const y = margin.top + drvIdx * rowHeight;
+            if (!Number.isFinite(y)) return null;
             const stints = driverStints[drv] || [];
+            const drvMeta = getDriver(drv);
+            const teamColor = drvMeta?.teamColor || getDriverColor(drv) || "var(--text-3)";
+            const displayName = drvMeta?.name || drv;
 
             return (
               <g key={drv} className="group cursor-pointer">
+                {/* Driver Team Colour Dot */}
+                <circle
+                  cx={margin.left - 48}
+                  cy={y + 11}
+                  r={3.5}
+                  fill={teamColor}
+                />
                 {/* Driver Code Label */}
                 <text
                   x={margin.left - 12}
@@ -152,6 +182,7 @@ export function TyreStintGantt({ data, loading = false }: TyreStintGanttProps) {
                 {stints.map((st, sIdx) => {
                   const x1 = xScale(st.start_lap);
                   const x2 = xScale(st.end_lap);
+                  if (!Number.isFinite(x1) || !Number.isFinite(x2)) return null;
                   const barWidth = Math.max(4, x2 - x1);
                   const color = getCompoundColor(st.compound);
 
@@ -161,15 +192,17 @@ export function TyreStintGantt({ data, loading = false }: TyreStintGanttProps) {
                       onClick={() => {
                         inspectItem({
                           type: "point",
-                          title: `${drv} — Stint ${st.stint}`,
+                          title: `${displayName} — Stint ${st.stint}`,
                           subtitle: `${st.compound.toUpperCase()} Compound`,
                           details: {
+                            Driver: displayName,
+                            Team: drvMeta?.team || "Unknown",
                             Compound: st.compound,
                             "Start Lap": st.start_lap,
                             "End Lap": st.end_lap,
                             "Stint Length": `${st.end_lap - st.start_lap + 1} laps`,
                           },
-                          queryContext: `Analyze ${drv} stint ${st.stint} tyre degradation`,
+                          queryContext: `Analyze ${displayName} stint ${st.stint} tyre degradation`,
                         });
                       }}
                     >

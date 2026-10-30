@@ -13,6 +13,11 @@ BANNED_STRINGS = [
     "Honda RBPT",
     "AlphaTauri / VCARB",
     "Max Verstappen(VER)",
+    "demoData",
+    "DEMO_MODE",
+    "DEMO_LABEL",
+    "Sample Grand Prix",
+    "Demo Circuit",
 ]
 
 def get_source_files():

@@ -59,6 +59,7 @@ def position_by_lap(
             return envelope("FastF1", "empty", "No lap positions for this session.")
 
         x = [0] + [int(i) for i in pos.index]
+        meta = drivers_meta(session, codes)
         series = []
         for c in codes:
             g = grid.get(c) if c in grid.index else None
@@ -67,13 +68,15 @@ def position_by_lap(
             except Exception:
                 first = None
             ys = [None if pd.isna(v) else int(v) for v in pos[c]]
-            series.append({"code": c, "y": [first] + ys})
+            series.append({"code": c, "driver": c, "x": x, "y": [first] + ys})
 
         return envelope(
             "FastF1",
             x=x,
             series=series,
-            drivers=drivers_meta(session, codes),
+            drivers=meta,
+            driver_meta=meta,
+            coverage_note="Retired drivers or missing laps are represented with null positions.",
             axes={
                 "x": {"label": "Lap", "unit": ""},
                 "y": {"label": "Position", "unit": ""},
@@ -108,19 +111,28 @@ def gap_evolution(
         gap = t_secs.sub(t_secs.min(axis=1), axis=0)
 
         codes = [c for c in (drivers or list(gap.columns)) if c in gap.columns]
-        series = [
-            {
+        meta = drivers_meta(session, codes)
+        series = []
+        for idx, c in enumerate(codes):
+            ys = [None if pd.isna(v) else round(float(v), 3) for v in gap[c]]
+            valid_ys = [v for v in ys if v is not None]
+            final_v = valid_ys[-1] if valid_ys else 0.0
+            gap_str = "Leader" if final_v == 0.0 else f"+{final_v:.3f}s"
+            series.append({
                 "code": c,
-                "y": [None if pd.isna(v) else round(float(v), 3) for v in gap[c]],
-            }
-            for c in codes
-        ]
+                "driver": c,
+                "position": idx + 1,
+                "gap": gap_str,
+                "gapSec": float(final_v),
+                "y": ys,
+            })
 
         return envelope(
             "FastF1",
             x=[int(i) for i in gap.index],
             series=series,
-            drivers=drivers_meta(session, codes),
+            drivers=meta,
+            driver_meta=meta,
             axes={
                 "x": {"label": "Lap", "unit": ""},
                 "y": {"label": "Gap to lap leader", "unit": "s", "invert": True},
@@ -210,11 +222,13 @@ def stints(session) -> Dict[str, Any]:
             rows.append(
                 {
                     "code": r.Driver,
+                    "driver": r.Driver,
                     "stint": int(r.Stint),
                     "compound": compound.upper(),
                     "start_lap": int(r.start_lap),
                     "end_lap": int(r.end_lap),
                     "laps": int(r.laps),
+                    "length": int(r.laps),
                 }
             )
 
@@ -325,7 +339,7 @@ def sector_heatmap(session) -> Dict[str, Any]:
     try:
         raw = session.laps
         if raw is None or raw.empty:
-            return envelope("FastF1", "empty", "No lap data for this session.")
+            return envelope("FastF1", "not_available", "No lap data for this session.", rows=[])
 
         l = clean_laps(raw)
         rows = []
@@ -369,7 +383,7 @@ def sector_heatmap(session) -> Dict[str, Any]:
             drivers=drivers_meta(session, codes),
         )
     except Exception as exc:
-        return envelope("FastF1", "empty", f"sector_heatmap error: {exc}")
+        return envelope("FastF1", "source_error", f"sector_heatmap error: {exc}", rows=[])
 
 
 # ---------------------------------------------------------------------------
@@ -380,7 +394,7 @@ def weather(session) -> Dict[str, Any]:
     try:
         w = session.weather_data
         if w is None or w.empty:
-            return envelope("FastF1", "empty", "No weather data for this session.")
+            return envelope("FastF1", "not_available", "Weather data was unrecorded for this session.", rows=[])
 
         laps = session.laps
         starts = laps.groupby("LapNumber")["LapStartTime"].min().dropna()
@@ -432,8 +446,8 @@ def weather(session) -> Dict[str, Any]:
         )
     except Exception as exc:
         if "datanotloaded" in str(exc).lower():
-            return envelope("FastF1", "not_ingested", "Data not ingested yet.")
-        return envelope("FastF1", "source_error", f"weather error: {exc}")
+            return envelope("FastF1", "not_ingested", "Data not ingested yet.", rows=[])
+        return envelope("FastF1", "source_error", f"weather error: {exc}", rows=[])
 
 
 # ---------------------------------------------------------------------------

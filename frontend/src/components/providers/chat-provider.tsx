@@ -226,7 +226,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
   const sendMessage = async (
     text?: string,
-    actionPayload?: { action: string; value?: any; option_label?: string; option_index?: number }
+    actionPayload?: { action: string; value?: any; chip?: any; option_label?: string; option_index?: number }
   ) => {
     if (isStreaming) return;
     const cleanText = (text || "").trim();
@@ -279,6 +279,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     if (actionPayload) {
       requestBody.action = actionPayload.action;
       requestBody.value = actionPayload.value;
+      if (actionPayload.chip || actionPayload.action === "chip") {
+        requestBody.chip = actionPayload.chip || actionPayload.value;
+      }
       requestBody.option_label = actionPayload.option_label;
       requestBody.option_index = actionPayload.option_index;
     } else {
@@ -297,7 +300,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       });
 
       if (!response.ok) {
-        throw new Error("The chat service is not running in this demo.");
+        throw new Error("The chat service is currently unavailable.");
       }
 
       const reader = response.body?.getReader();
@@ -393,7 +396,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                   m.id === assistantMsgId
                     ? {
                         ...m,
-                        sources: data.sources || ["Jolpica"],
+                        sources: Array.isArray(data.sources)
+                          ? (Array.from(new Set(data.sources.map(String))) as string[])
+                          : [],
                         resolved_context: data.resolved_context,
                         timestamp: data.fetched_at || undefined,
                       }
@@ -410,7 +415,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       if (err.name === "AbortError") {
         setActiveStatus(null);
       } else {
-        setError("The chat service is not running in this demo.");
+        setError("The chat service is currently unavailable. Please ensure the backend server is running.");
         // Remove empty assistant placeholder so no blank bubbles appear
         setMessages((prev) =>
           prev.filter((m) => m.id !== assistantMsgId || (m.content && m.content.trim().length > 0))

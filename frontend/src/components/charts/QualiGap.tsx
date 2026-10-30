@@ -10,6 +10,7 @@
  */
 import React, { useState, useMemo } from "react";
 import { scaleLinear } from "d3-scale";
+import { useIdentity } from "@/lib/useIdentity";
 
 export interface StageDriver {
   code: string;
@@ -38,6 +39,7 @@ interface QualiGapProps {
 }
 
 export function QualiGap({ d }: QualiGapProps) {
+  const { getDriver, getDriverColor } = useIdentity();
   const [selectedStage, setSelectedStage] = useState<"Q1" | "Q2" | "Q3">("Q3");
 
   // Derive stages if not directly provided
@@ -163,6 +165,9 @@ export function QualiGap({ d }: QualiGapProps) {
                 const gap = r.gap_s ?? 0;
                 const barW = Math.max(2, xs(gap) - m.l);
                 const isFastest = gap === 0;
+                const drvMeta = getDriver(r.code);
+                const teamColor = drvMeta?.teamColor || getDriverColor(r.code) || "var(--accent, #6366f1)";
+                const barColor = isFastest ? "var(--positive, #10b981)" : teamColor;
 
                 return (
                   <g key={r.code} className="group">
@@ -198,7 +203,7 @@ export function QualiGap({ d }: QualiGapProps) {
                       width={barW}
                       height={ROW_H - 10}
                       rx={3}
-                      fill={isFastest ? "var(--positive, #10b981)" : "var(--accent, #6366f1)"}
+                      fill={barColor}
                       opacity={0.85}
                     />
 
@@ -238,20 +243,33 @@ export function QualiGap({ d }: QualiGapProps) {
                 </tr>
               </thead>
               <tbody className="divide-y divide-[var(--border)]">
-                {finalGrid.map((entry) => (
-                  <tr key={entry.code} className="hover:bg-[var(--surface-2)]">
-                    <td className="py-1 px-2 font-bold text-[var(--text)]">P{entry.position}</td>
-                    <td className="py-1 px-2 font-bold text-[var(--text)]">{entry.code}</td>
-                    <td className="py-1 px-2 text-[var(--text-3)] truncate max-w-[110px]">
-                      {entry.team || "-"}
-                    </td>
-                    <td className="py-1 px-2 text-right">
-                      <span className="px-1.5 py-0.5 rounded bg-[var(--surface-2)] text-[var(--text-2)] text-[10px]">
-                        {entry.eliminated_in || "Q1"}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
+                {finalGrid.map((entry) => {
+                  const drvMeta = getDriver(entry.code);
+                  const teamColor = drvMeta?.teamColor || getDriverColor(entry.code) || "var(--accent)";
+                  const displayName = drvMeta?.name || entry.name || entry.code;
+                  const teamName = drvMeta?.team || entry.team || "-";
+
+                  return (
+                    <tr key={entry.code} className="hover:bg-[var(--surface-2)]">
+                      <td className="py-1 px-2 font-bold text-[var(--text)]">P{entry.position}</td>
+                      <td className="py-1 px-2 font-bold text-[var(--text)]">
+                        <span
+                          className="inline-block w-2 h-2 rounded-full mr-1.5 align-middle"
+                          style={{ backgroundColor: teamColor }}
+                        />
+                        <span title={displayName}>{entry.code}</span>
+                      </td>
+                      <td className="py-1 px-2 text-[var(--text-3)] truncate max-w-[110px]" title={teamName}>
+                        {teamName}
+                      </td>
+                      <td className="py-1 px-2 text-right">
+                        <span className="px-1.5 py-0.5 rounded bg-[var(--surface-2)] text-[var(--text-2)] text-[10px]">
+                          {entry.eliminated_in || "Q1"}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

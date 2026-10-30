@@ -48,10 +48,11 @@ export function ChatThread({ hideHeader = false }: { hideHeader?: boolean }): Re
     threadEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, activeStatus]);
 
-  const handleChipClick = (value: any, label: string, action?: string) => {
+  const handleChipClick = (value: any, label: string, action?: string, chip?: any) => {
     sendMessage(undefined, {
       action: action || "select",
       value,
+      chip,
       option_label: label,
     });
   };
@@ -250,9 +251,18 @@ export function ChatThread({ hideHeader = false }: { hideHeader?: boolean }): Re
                       <button
                         key={fIdx}
                         type="button"
-                        onClick={() =>
-                          handleChipClick(f.value || f.label, f.label, f.action || "select")
-                        }
+                        onClick={() => {
+                          if (f.action === "chip" || f.intent || f.slots) {
+                            handleChipClick(
+                              f.value || { intent: f.intent, slots: f.slots },
+                              f.label,
+                              "chip",
+                              { intent: f.intent, slots: f.slots }
+                            );
+                          } else {
+                            handleChipClick(f.value || f.label, f.label, f.action || "select");
+                          }
+                        }}
                         disabled={isStreaming}
                         className="text-[11px] px-2.5 py-1 rounded border border-[var(--border)] bg-[var(--surface)] hover:bg-[var(--raised)] text-[var(--text-2)] hover:text-[var(--text)] transition-colors"
                       >
@@ -263,13 +273,15 @@ export function ChatThread({ hideHeader = false }: { hideHeader?: boolean }): Re
                 )}
 
                 {/* Footer: Sources actually used and dynamic timestamp */}
-                {!isUser && !m.clarify && (m.sources || m.resolved_context) && (
+                {!isUser && !m.clarify && ((m.sources && m.sources.length > 0) || m.resolved_context?.grand_prix) && (
                   <div className="mt-3 pt-2 border-t border-[var(--border)] text-[11px] font-mono text-[var(--text-3)] flex items-center justify-between">
                     <span>
                       {m.resolved_context?.grand_prix
                         ? `Race: ${m.resolved_context.grand_prix} | `
                         : ""}
-                      {m.sources?.join(", ") || "Jolpica"}
+                      {m.sources && m.sources.length > 0
+                        ? Array.from(new Set(m.sources)).join(", ")
+                        : ""}
                     </span>
                     <span>{m.timestamp || ""}</span>
                   </div>

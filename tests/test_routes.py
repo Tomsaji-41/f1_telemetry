@@ -68,6 +68,6 @@ def test_chat_stream_verstappen_strategy_clarify():
 
 
 def test_dead_chat_route_is_removed():
-    """Old /api/chat route should no longer exist (returns 404/405)."""
+    """Unsupported /api/chat request returns 422 (or 404/405)."""
     resp = client.post("/api/chat", json={"message": "test"})
-    assert resp.status_code in (404, 405)
+    assert resp.status_code in (404, 405, 422)

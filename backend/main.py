@@ -5,12 +5,16 @@ import json
 import logging
 import time
 import traceback
+from collections import OrderedDict
 from contextlib import asynccontextmanager
 from typing import Optional, Dict, Any, List, Union
 from fastapi import FastAPI, HTTPException, Request, Query
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 try:
     from backend import config, tools, agent, cache, resolver, utils
@@ -18,12 +22,14 @@ try:
     from backend.charts.routes import router as charts_router
     from backend.charts import jobs as chart_jobs
     from backend.charts import loader as chart_loader
+    from backend.api_data import router as data_router
 except ImportError:
     import config, tools, agent, cache, resolver, utils
     from sources import jolpica, fastf1_src, openf1_src
     from charts.routes import router as charts_router
     from charts import jobs as chart_jobs
     from charts import loader as chart_loader
+    from api_data import router as data_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("pitboss")
@@ -33,13 +39,55 @@ config.validate()
 # In-memory recent request metrics
 RECENT_METRICS: List[Dict[str, Any]] = []
 
+import os
+import sys
+
+is_testing = bool(
+    os.getenv("PYTEST_CURRENT_TEST")
+    or any("pytest" in arg.lower() for arg in sys.argv)
+    or os.getenv("TESTING", "").lower() in ("1", "true")
+)
+limiter = Limiter(key_func=get_remote_address, enabled=not is_testing)
+
 # CORS restricted to Next.js dev server per spec
 origins = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
 ]
 
-CONVERSATIONS_STORE: Dict[str, List[Dict[str, Any]]] = {}
+class BoundedConversationStore:
+    def __init__(self, max_clients: int = 500, ttl_seconds: int = 3600):
+        self.max_clients = max_clients
+        self.ttl = ttl_seconds
+        self._data: OrderedDict[str, Dict[str, Any]] = OrderedDict()
+
+    def get(self, key: str, default=None):
+        if key not in self._data:
+            return default
+        entry = self._data[key]
+        if time.time() - entry["timestamp"] > self.ttl:
+            del self._data[key]
+            return default
+        self._data.move_to_end(key)
+        return entry["conversations"]
+
+    def __setitem__(self, key: str, convs: Any):
+        if key in self._data:
+            del self._data[key]
+        elif len(self._data) >= self.max_clients:
+            self._data.popitem(last=False)
+        self._data[key] = {"timestamp": time.time(), "conversations": convs}
+
+    def __getitem__(self, key: str):
+        val = self.get(key)
+        if val is None:
+            raise KeyError(key)
+        return val
+
+    def __contains__(self, key: str):
+        return self.get(key) is not None
+
+CONVERSATIONS_STORE = BoundedConversationStore(max_clients=500, ttl_seconds=3600)
 
 class ChatHistoryItem(BaseModel):
     role: str
@@ -52,6 +100,8 @@ class ChatRequest(BaseModel):
     message: Optional[str] = None
     prompt: Optional[str] = None
     action: Optional[str] = None
+    chip: Optional[Dict[str, Any]] = None
+    turn_id: Optional[str] = None
     value: Optional[Any] = None
     option_label: Optional[str] = None
     option_index: Optional[int] = None
@@ -65,14 +115,29 @@ import threading
 from fastapi.responses import StreamingResponse
 
 def _prefetch_worker():
-    """Background startup prefetch (Rule S2). Must never crash startup."""
+    """Background startup prefetch worker (Phase P3). Rate-limited, one-at-a-time, never crashes."""
     try:
         current_year = datetime.date.today().year
-        logger.info(f"[startup] Prefetching {current_year} season schedule and standings...")
+        logger.info(f"[startup] Warming {current_year} season schedule and standings...")
         tools.get_season_schedule(current_year)
         tools.get_standings(current_year, kind="drivers")
         tools.get_standings(current_year, kind="constructors")
-        logger.info("[startup] Background prefetch complete.")
+
+        # 2. Warm team cards and logos
+        try:
+            from backend import team_cards
+            team_cards.get_team_cards(current_year, 1)
+        except Exception:
+            pass
+
+        # 3. Warm circuits catalog
+        try:
+            from backend import circuits
+            circuits.fetch_all_circuits(current_year, scope="season")
+        except Exception:
+            pass
+
+        logger.info("[startup] Background prefetch warm-up complete.")
     except Exception as e:
         logger.warning(f"[startup] Non-fatal background prefetch error: {e}")
 
@@ -90,7 +155,15 @@ def get_all_registered_routes(obj) -> List[Any]:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown lifecycle manager (replaces deprecated on_event)."""
-    # ── Startup ──────────────────────────────────────────────────────────────
+    # ── Startup: Cache Hygiene (Phase 1.5) ──────────────────────────────────
+    try:
+        cache.purge_bad_entries()
+        from backend import logos
+        logos.purge_null_logo_cache()
+    except Exception as e:
+        logger.warning(f"[startup] Cache purge error (ignored): {e}")
+
+    # ── Banner ──────────────────────────────────────────────────────────────
     try:
         from pathlib import Path
         banner_file = Path(__file__).resolve().parent / "banner.txt"
@@ -136,7 +209,11 @@ async def lifespan(app: FastAPI):
 
 # Create app AFTER lifespan is defined
 app = FastAPI(title="Telemetra Engine", version="7.0.0", lifespan=lifespan)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 app.include_router(charts_router)
+app.include_router(data_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -144,8 +221,41 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*", "X-Client-Id"],
-    expose_headers=["*"],
+    expose_headers=["*", "Server-Timing", "ETag"],
 )
+
+@app.middleware("http")
+async def performance_timing_and_cache_middleware(request: Request, call_next):
+    """
+    Performance Middleware (P0 & P3):
+    - Injects Server-Timing header with stage durations
+    - Injects Cache-Control and ETag headers
+    - Supports 304 Not Modified on matching If-None-Match
+    """
+    start_time = time.perf_counter()
+    request.state.timing_stages = {}
+
+    response = await call_next(request)
+    total_ms = (time.perf_counter() - start_time) * 1000.0
+
+    timings = [f"total;dur={total_ms:.1f}"]
+    for stage, dur in getattr(request.state, "timing_stages", {}).items():
+        timings.append(f"{stage};dur={dur:.1f}")
+
+    response.headers["Server-Timing"] = ", ".join(timings)
+
+    # Cache-Control and ETag for read-only GET requests
+    if request.method == "GET" and response.status_code == 200:
+        if "Cache-Control" not in response.headers:
+            path = request.url.path
+            if "/api/logos" in path or "/api/circuits" in path or "/api/legends" in path:
+                response.headers["Cache-Control"] = "public, max-age=3600, stale-while-revalidate=86400"
+            elif "/api/health" in path:
+                response.headers["Cache-Control"] = "no-cache"
+            else:
+                response.headers["Cache-Control"] = "public, max-age=60, stale-while-revalidate=600"
+
+    return response
 
 @app.get("/")
 def root():
@@ -164,22 +274,30 @@ def root():
     }
 
 @app.post("/api/chat")
+@limiter.limit("60/minute")
 async def chat_endpoint(req: ChatRequest, request: Request):
-    if req.message and not req.text and not req.action:
-        raise HTTPException(status_code=404, detail="The old chat endpoint using 'message' has been removed. Use /api/chat/stream or send {'text': ...}")
+    content_length = request.headers.get("content-length")
+    if content_length and int(content_length) > 65536:
+        raise HTTPException(status_code=413, detail="Payload too large")
+
+    text = (req.text or "").strip()
+    if not text and not req.action and not req.chip:
+        raise HTTPException(status_code=422, detail="Missing required 'text' or 'action' field in chat request.")
+    if text and len(text) > 1000:
+        raise HTTPException(status_code=400, detail="Message exceeds maximum length of 1000 characters.")
 
     client_id = request.headers.get("x-client-id", "default")
     conv_id = req.conversation_id or f"conv_{client_id}"
-    text = (req.text or req.message or req.prompt or "").strip()
 
     clarify_resp = None
     answer_resp = None
     error_resp = None
 
     async for ev_type, ev_data in agent.process_chat(
-        message=text if not req.action else None,
+        message=text if not req.action and not req.chip else None,
         action=req.action,
         value=req.value,
+        chip=req.chip,
         option_label=req.option_label,
         option_index=req.option_index,
         pending_state=req.pending_state,
@@ -222,13 +340,20 @@ async def chat_endpoint(req: ChatRequest, request: Request):
     return {"type": "answer", "turn_id": turn_id, "markdown": "No response generated."}
 
 @app.post("/api/chat/stream")
+@limiter.limit("60/minute")
 async def chat_stream_endpoint(req: ChatRequest, request: Request):
+    content_length = request.headers.get("content-length")
+    if content_length and int(content_length) > 65536:
+        raise HTTPException(status_code=413, detail="Payload too large")
+
     client_id = request.headers.get("x-client-id", "default")
     conv_id = req.conversation_id or f"conv_{client_id}"
     text = (req.text or req.message or req.prompt or "").strip()
 
-    if not text and not req.action:
-        raise HTTPException(status_code=400, detail="Missing question / message / action.")
+    if not text and not req.action and not req.chip:
+        raise HTTPException(status_code=422, detail="Missing question / message / action.")
+    if text and len(text) > 1000:
+        raise HTTPException(status_code=400, detail="Message exceeds maximum length of 1000 characters.")
 
     async def event_generator():
         emitted_done = False
@@ -237,9 +362,10 @@ async def chat_stream_endpoint(req: ChatRequest, request: Request):
         async def producer():
             try:
                 async for ev_type, ev_data in agent.process_chat(
-                    message=text if not req.action else None,
+                    message=text if not req.action and not req.chip else None,
                     action=req.action,
                     value=req.value,
+                    chip=req.chip,
                     option_label=req.option_label,
                     option_index=req.option_index,
                     pending_state=req.pending_state,
@@ -338,16 +464,35 @@ def metrics_endpoint():
         "metrics": list(RECENT_METRICS)
     }
 
+_HEALTH_CACHE = {
+    "jolpica": "reachable",
+    "last_check": 0.0,
+    "cache_stats": {},
+}
+
+def _refresh_health_cache():
+    try:
+        s = jolpica.fetch_schedule(datetime.date.today().year)
+        _HEALTH_CACHE["jolpica"] = "reachable" if s.get("status") == "ok" else "unreachable"
+    except Exception:
+        _HEALTH_CACHE["jolpica"] = "unreachable"
+    try:
+        _HEALTH_CACHE["cache_stats"] = cache.get_cache_stats()
+    except Exception:
+        pass
+    _HEALTH_CACHE["last_check"] = time.time()
+
 @app.get("/api/health")
 @app.get("/health")
 def health_endpoint():
-    # Source reachability test
-    jolpica_ok = False
-    try:
-        s = jolpica.fetch_schedule(datetime.date.today().year)
-        jolpica_ok = s.get("status") == "ok"
-    except Exception:
-        pass
+    """Non-blocking health probe responding in < 10ms at all times."""
+    now = time.time()
+    if now - _HEALTH_CACHE["last_check"] > 60:
+        threading.Thread(target=_refresh_health_cache, daemon=True, name="health-probe").start()
+
+    cache_info = _HEALTH_CACHE.get("cache_stats")
+    if not cache_info:
+        cache_info = {"active_entries": 0, "total_bytes": 0, "db_path": str(config.DB_PATH)}
 
     return {
         "status": "healthy",
@@ -361,61 +506,12 @@ def health_endpoint():
             "gemini": config.GEMINI_MODEL,
             "groq": config.GROQ_MODEL
         },
-        "cache": cache.get_cache_stats(),
+        "cache": cache_info,
         "source_reachability": {
-            "jolpica": "reachable" if jolpica_ok else "unreachable",
+            "jolpica": _HEALTH_CACHE.get("jolpica", "reachable"),
             "fastf1": "available" if fastf1_src.fastf1 else "unavailable",
             "openf1": "reachable"
         }
-    }
-
-@app.get("/api/schedule")
-def schedule_endpoint(year: Optional[int] = None):
-    if year is None:
-        year = datetime.date.today().year
-    raw_sched = jolpica.fetch_schedule(year)
-    if raw_sched.get("status") != "ok":
-        if year == datetime.date.today().year:
-            year = year - 1
-            raw_sched = jolpica.fetch_schedule(year)
-
-    if raw_sched.get("status") != "ok":
-        return raw_sched
-
-    today = datetime.date.today()
-    completed_races = []
-    enriched_races = []
-    for r in raw_sched.get("schedule", []):
-        d_str = r.get("date", "")
-        race_name = r.get("grand_prix") or r.get("race_name", "")
-        is_completed = False
-        try:
-            r_date = datetime.date.fromisoformat(d_str)
-            if r_date < today:
-                is_completed = True
-        except Exception:
-            pass
-        item = {
-            **r,
-            "round": int(r.get("round", 0)),
-            "race_name": race_name,
-            "status": "completed" if is_completed else "upcoming",
-        }
-        enriched_races.append(item)
-        if is_completed:
-            completed_races.append(item)
-
-    latest_completed = completed_races[-1] if completed_races else (enriched_races[0] if enriched_races else None)
-
-    return {
-        "status": "ok",
-        "year": year,
-        "source": "Jolpica",
-        "fetched_at": utils.format_utc_timestamp(),
-        "total_rounds": len(enriched_races),
-        "schedule": enriched_races,
-        "latest_completed_round": latest_completed.get("round") if latest_completed else 1,
-        "latest_completed_race": latest_completed,
     }
 
 @app.get("/api/live")
@@ -426,6 +522,50 @@ def live_endpoint():
 @app.get("/api/driver-image/{driver}")
 def driver_image_endpoint(driver: str, year: Optional[int] = None):
     return openf1_src.fetch_driver_image(driver, year=year)
+
+@app.get("/api/logos/{constructor_id}.png")
+def get_team_logo_proxy(constructor_id: str, year: Optional[int] = None):
+    """Backend proxy serving cached team logo PNG images (Phase J1)."""
+    try:
+        from backend import logos
+    except ImportError:
+        import logos
+    res = logos.get_logo_image_bytes(constructor_id, year=year)
+    if not res:
+        raise HTTPException(status_code=404, detail=f"Logo not available for constructor '{constructor_id}'")
+    raw_bytes, media_type = res if isinstance(res, tuple) else (res, "image/png")
+    return Response(
+        content=raw_bytes,
+        media_type=media_type,
+        headers={"Cache-Control": "public, max-age=86400"}
+    )
+
+@app.get("/api/circuits")
+def get_circuits_list(year: Optional[int] = None, scope: str = "season"):
+    """Circuits catalog in season or all-time (Phase K)."""
+    try:
+        from backend import circuits
+    except ImportError:
+        import circuits
+    return circuits.fetch_all_circuits(year=year, scope=scope)
+
+@app.get("/api/circuits/{circuit_id}")
+def get_circuit_details_endpoint(circuit_id: str, year: Optional[int] = None, round: Optional[int] = Query(None, alias="round")):
+    """Circuit details, track facts, history, climate, and description (Phase K)."""
+    try:
+        from backend import circuits
+    except ImportError:
+        import circuits
+    return circuits.get_circuit_details(circuit_id=circuit_id, year=year, round_num=round)
+
+@app.get("/api/circuits/{circuit_id}/geometry")
+def get_circuit_geometry_endpoint(circuit_id: str, year: Optional[int] = None, round: Optional[int] = Query(None, alias="round")):
+    """Circuit 3D/2D centerline coordinates and corner telemetry (Phase K)."""
+    try:
+        from backend import circuits
+    except ImportError:
+        import circuits
+    return circuits.get_circuit_geometry(circuit_id=circuit_id, year=year, round_num=round)
 
 @app.get("/api/tool/{name}")
 def run_tool_debug(name: str, request: Request):
